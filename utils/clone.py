@@ -148,10 +148,17 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     run(['git', 'clean', '-ffdx'], cwd=gnpath, check=True)
 
     get_logger().info('Running gsync')
+    # .gclient is executable Python. POSIX separators avoid turning Windows
+    # paths such as ``C:\\Users`` into invalid escape sequences (notably
+    # ``\\U``) while remaining valid for depot_tools on Windows.
+    gclient_output = args.output.as_posix()
     if args.custom_config:
-        copy(args.custom_config, ucstaging / '.gclient').replace('UC_OUT', str(args.output))
+        custom_config = Path(args.custom_config).read_text(encoding=ENCODING)
+        (ucstaging / '.gclient').write_text(
+            custom_config.replace('UC_OUT', gclient_output), encoding=ENCODING)
     else:
-        (ucstaging / '.gclient').write_text(GC_CONFIG.replace('UC_OUT', str(args.output)))
+        (ucstaging / '.gclient').write_text(
+            GC_CONFIG.replace('UC_OUT', gclient_output), encoding=ENCODING)
     gcpath = dtpath / 'gclient'
     if iswin:
         gcpath = gcpath.with_suffix('.bat')
