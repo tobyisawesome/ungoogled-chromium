@@ -1021,10 +1021,10 @@ void Shell::ApplySystemTheme() {
         winrt::box_value(winrt::hstring{L"TabViewBorderBrush"});
     tab_view_.Resources().Insert(selected_key, commanding_layer);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
-    // TabView uses this brush for its 4 px lower radius paths. Matching the
-    // commanding layer turns those native paths into visible material
-    // shoulders instead of a low-contrast stroke at the tab/toolbar join.
-    tab_view_.Resources().Insert(shoulder_key, commanding_layer);
+    // The separate shoulder paths provide the complete lower connector. Keep
+    // TabView's own translucent border clear so it cannot alpha-stack with a
+    // shoulder and leave a dark nib where the two geometries meet.
+    tab_view_.Resources().Insert(shoulder_key, transparent);
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }
