@@ -93,5 +93,16 @@
     <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.2.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.2.1" />
   </ItemGroup>
+  <Target Name="WriteCurveBrowserPayloadManifest" AfterTargets="Build">
+    <ItemGroup>
+      <CurveBrowserPayload Include="$(OutDir)*.dll;$(OutDir)*.pri;$(OutDir)*.xbf;$(OutDir)*.winmd" />
+      <CurveBrowserPayload Remove="$(OutDir)WindowsChromiumShellPreview.*" />
+    </ItemGroup>
+    <WriteLinesToFile
+        File="$(OutDir)windows_chromium_payload_manifest.txt"
+        Lines="@(CurveBrowserPayload->'%(Filename)%(Extension)')"
+        Overwrite="true"
+        Encoding="UTF-8" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

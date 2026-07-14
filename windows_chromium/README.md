@@ -51,6 +51,12 @@ shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\profiles.png --pro
 shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\about.png --about
 ```
 
+Each shell build also writes
+`shell/out/<Configuration>/x64/windows_chromium_payload_manifest.txt`. The
+manifest lists the self-contained DLL, PRI, XBF, and WinMD payload copied beside
+Chromium and consumed by the Curve Browser portable packager. Preview-host
+artifacts and development symbols are excluded.
+
 ## Compatibility boundary
 
 Normal URLs, diagnostics pages, DevTools, the PDF viewer, security
