@@ -11,3 +11,10 @@ __pycache__/
 
 # Ignore optional build / cache directory
 /build
+
+# Windows Chromium shell build outputs
+/windows_chromium/shell/.vs/
+/windows_chromium/shell/obj/
+/windows_chromium/shell/out/
+/windows_chromium/shell/packages/
+/windows_chromium/shell/packages-resolved/
