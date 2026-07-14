@@ -37,7 +37,7 @@ using winrt::Microsoft::UI::Xaml::VerticalAlignment;
 using winrt::Microsoft::UI::Xaml::Visibility;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 
-constexpr double kTabRowHeight = 44.0;
+constexpr double kTabRowHeight = 48.0;
 constexpr double kToolbarHeight = 48.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
@@ -198,11 +198,11 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   ApplySystemTheme();
   ResizeIsland();
 
-#if defined(DWMWA_SYSTEMBACKDROP_TYPE)
-  const int backdrop_type = 2;  // DWMSBT_MAINWINDOW / Mica.
+  // Mica Alt is the system backdrop intended for windows with tabbed title
+  // bars. Older Windows versions safely ignore this window attribute.
+  const DWM_SYSTEMBACKDROP_TYPE backdrop_type = DWMSBT_TABBEDWINDOW;
   DwmSetWindowAttribute(parent_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
                         sizeof(backdrop_type));
-#endif
 }
 
 Shell::~Shell() {
@@ -231,7 +231,7 @@ void Shell::BuildVisualTree() {
   tab_view_.CanReorderTabs(true);
   tab_view_.TabWidthMode(TabViewWidthMode::SizeToContent);
   tab_view_.Padding(Thickness{8, 0, 0, 0});
-  tab_view_.Margin(Thickness{0});
+  tab_view_.Margin(Thickness{0, 6, 0, 0});
   Grid::SetRow(tab_view_, 0);
   root_.Children().Append(tab_view_);
 
@@ -277,15 +277,19 @@ void Shell::BuildVisualTree() {
   root_.Children().Append(native_page_host_);
 }
 
-Button Shell::MakeGlyphButton(std::wstring_view glyph,
-                              std::wstring_view tooltip,
-                              WcsCommand command) {
-  Button button;
-  button.Content(Glyph(glyph));
-  button.Width(36);
-  button.Height(36);
+Shell::AppBarButton Shell::MakeGlyphButton(std::wstring_view glyph,
+                                           std::wstring_view tooltip,
+                                           WcsCommand command) {
+  AppBarButton button;
+  button.Icon(Glyph(glyph, 18));
+  button.IsCompact(true);
+  button.Width(40);
+  button.Height(40);
   button.Padding(Thickness{0});
-  button.Margin(Thickness{2, 0, 2, 0});
+  button.Margin(Thickness{0});
+  button.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
+      Color(0, 0, 0, 0)});
+  button.BorderThickness(Thickness{0});
   ToolTipService::SetToolTip(button, winrt::box_value(tooltip));
   button.Click([this, command](const auto&, const auto&) { Invoke(command); });
   return button;
@@ -293,7 +297,10 @@ Button Shell::MakeGlyphButton(std::wstring_view glyph,
 
 void Shell::BuildToolbar() {
   toolbar_ = Grid{};
-  toolbar_.Padding(Thickness{8, 5, 8, 7});
+  // The 40 px controls plus 4 px above and below exactly fill this 48 px
+  // commanding row. Keeping that arithmetic exact prevents XAML from
+  // compressing or clipping the icon controls.
+  toolbar_.Padding(Thickness{8, 4, 8, 4});
   Grid::SetRow(toolbar_, 1);
   root_.Children().Append(toolbar_);
 
@@ -328,10 +335,9 @@ void Shell::BuildToolbar() {
   address_box_ = TextBox{};
   address_box_.PlaceholderText(L"Search or enter an address");
   address_box_.VerticalContentAlignment(VerticalAlignment::Center);
-  address_box_.Height(36);
-  address_box_.Margin(Thickness{4, 0, 6, 0});
-  address_box_.CornerRadius(CornerRadius{18});
-  address_box_.Padding(Thickness{16, 0, 16, 0});
+  address_box_.Height(32);
+  address_box_.Margin(Thickness{4, 0, 8, 0});
+  address_box_.Padding(Thickness{12, 0, 12, 0});
   Grid::SetColumn(address_box_, 3);
   toolbar_.Children().Append(address_box_);
   address_box_.KeyDown(
@@ -430,7 +436,8 @@ HRESULT Shell::Update(const WcsWindowState& state) {
     UpdateTabs(state);
     back_button_.IsEnabled(state.can_go_back != 0);
     forward_button_.IsEnabled(state.can_go_forward != 0);
-    profile_button_.Content(Glyph(state.is_incognito ? L"\uE727" : L"\uE77B"));
+    profile_button_.Icon(Glyph(state.is_incognito ? L"\uE727" : L"\uE77B",
+                               18));
     ToolTipService::SetToolTip(
         profile_button_,
         winrt::box_value(state.profile_name ? state.profile_name : L"Profiles"));
@@ -525,10 +532,9 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
 
 bool Shell::IsNativePage(std::wstring_view url) const {
   constexpr std::wstring_view prefixes[] = {
-      L"chrome://settings",         L"chrome://downloads",
-      L"chrome://history",          L"chrome://bookmarks",
-      L"chrome://extensions",       L"chrome://password-manager",
-      L"chrome://profile-internals", L"chrome://version"};
+      L"chrome://settings",   L"chrome://downloads", L"chrome://history",
+      L"chrome://bookmarks",  L"chrome://extensions",
+      L"chrome://password-manager"};
   return std::any_of(std::begin(prefixes), std::end(prefixes),
                      [url](std::wstring_view prefix) {
                        return StartsWithInsensitive(url, prefix);
@@ -536,13 +542,17 @@ bool Shell::IsNativePage(std::wstring_view url) const {
 }
 
 std::wstring Shell::NativePageTitle(std::wstring_view url) const {
+  if (StartsWithInsensitive(url, L"chrome://settings/manageProfile")) {
+    return L"Profiles";
+  }
+  if (StartsWithInsensitive(url, L"chrome://settings/help")) {
+    return L"About Windows Chromium";
+  }
   if (StartsWithInsensitive(url, L"chrome://downloads")) return L"Downloads";
   if (StartsWithInsensitive(url, L"chrome://history")) return L"History";
   if (StartsWithInsensitive(url, L"chrome://bookmarks")) return L"Bookmarks";
   if (StartsWithInsensitive(url, L"chrome://extensions")) return L"Extensions";
   if (StartsWithInsensitive(url, L"chrome://password-manager")) return L"Passwords";
-  if (StartsWithInsensitive(url, L"chrome://profile")) return L"Profiles";
-  if (StartsWithInsensitive(url, L"chrome://version")) return L"About Windows Chromium";
   return L"Settings";
 }
 
@@ -574,7 +584,50 @@ void Shell::UpdateNativePage(std::wstring_view url) {
   title.Margin(Thickness{0, 0, 0, 20});
   page.Children().Append(title);
 
-  if (StartsWithInsensitive(url, L"chrome://settings")) {
+  if (StartsWithInsensitive(url, L"chrome://settings/manageProfile")) {
+    Button avatar;
+    avatar.Content(Glyph(L"\uE77B", 24));
+    avatar.Width(44);
+    avatar.Height(44);
+    page.Children().Append(MakeSettingsCard(
+        L"Local profile",
+        L"Bookmarks, history, passwords, and preferences stay in this local Chromium profile.",
+        avatar));
+
+    TextBox profile_name;
+    profile_name.Text(L"Local profile");
+    profile_name.MinWidth(220);
+    page.Children().Append(MakeSettingsCard(
+        L"Profile name", L"Choose the name shown in the browser toolbar.",
+        profile_name));
+
+    Button new_profile;
+    new_profile.Content(winrt::box_value(L"Add profile"));
+    new_profile.Click([this](const auto&, const auto&) {
+      Invoke(WCS_COMMAND_NEW_WINDOW);
+    });
+    page.Children().Append(MakeSettingsCard(
+        L"Other profiles",
+        L"Create another isolated local browsing profile in a new window.",
+        new_profile));
+  } else if (StartsWithInsensitive(url, L"chrome://settings/help")) {
+    TextBlock engine;
+    engine.Text(L"Chromium engine");
+    engine.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    page.Children().Append(MakeSettingsCard(
+        L"Browser engine",
+        L"Built on ungoogled Chromium with native Windows 11 browser chrome.",
+        engine));
+
+    TextBlock updates;
+    updates.Text(L"Up to date");
+    updates.Foreground(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
+        Color(16, 124, 16)});
+    page.Children().Append(MakeSettingsCard(
+        L"Updates",
+        L"Update checks use the Windows Chromium release channel and never require a Google account.",
+        updates));
+  } else if (StartsWithInsensitive(url, L"chrome://settings")) {
     ToggleSwitch privacy;
     privacy.IsOn(true);
     page.Children().Append(MakeSettingsCard(
@@ -723,11 +776,19 @@ void Shell::ApplySystemTheme() {
     const bool dark = (static_cast<int>(background.R) + background.G +
                        background.B) < 384;
     root_.RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Light);
+    // Keep the base translucent so the parent's Mica Alt backdrop remains
+    // visible. The toolbar is the commanding layer and native pages are the
+    // content layer recommended for tabbed Windows 11 applications.
     root_.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-        dark ? Color(32, 32, 32) : Color(243, 243, 243)});
+        dark ? Color(32, 32, 32, 196) : Color(243, 243, 243, 196)});
+    tab_view_.Background(
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
+            Color(0, 0, 0, 0)});
+    toolbar_.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
+        dark ? Color(32, 32, 32, 218) : Color(243, 243, 243, 218)});
     native_page_host_.Background(
         winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-            dark ? Color(28, 28, 28) : Color(249, 249, 249)});
+            dark ? Color(28, 28, 28, 242) : Color(249, 249, 249, 242)});
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }

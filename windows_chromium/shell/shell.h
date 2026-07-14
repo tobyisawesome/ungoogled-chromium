@@ -48,16 +48,16 @@ class Shell final {
   HRESULT Capture(const wchar_t* output_path);
 
  private:
-  using Button = winrt::Microsoft::UI::Xaml::Controls::Button;
+  using AppBarButton = winrt::Microsoft::UI::Xaml::Controls::AppBarButton;
   using MenuFlyout = winrt::Microsoft::UI::Xaml::Controls::MenuFlyout;
   using TabViewItem = winrt::Microsoft::UI::Xaml::Controls::TabViewItem;
 
   void BuildVisualTree();
   void BuildToolbar();
   void BuildMenus();
-  Button MakeGlyphButton(std::wstring_view glyph,
-                         std::wstring_view tooltip,
-                         WcsCommand command);
+  AppBarButton MakeGlyphButton(std::wstring_view glyph,
+                               std::wstring_view tooltip,
+                               WcsCommand command);
   winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem MakeMenuItem(
       std::wstring_view text,
       WcsCommand command,
@@ -102,11 +102,11 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
-  Button back_button_{nullptr};
-  Button forward_button_{nullptr};
-  Button reload_button_{nullptr};
-  Button profile_button_{nullptr};
-  Button menu_button_{nullptr};
+  AppBarButton back_button_{nullptr};
+  AppBarButton forward_button_{nullptr};
+  AppBarButton reload_button_{nullptr};
+  AppBarButton profile_button_{nullptr};
+  AppBarButton menu_button_{nullptr};
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;

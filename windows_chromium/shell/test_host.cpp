@@ -68,6 +68,18 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
     PushState();
   } else if (args->command == WCS_COMMAND_OPEN_SETTINGS) {
     g_active = 2;
+    g_titles[g_active] = L"Settings";
+    g_urls[g_active] = L"chrome://settings/";
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_PROFILES) {
+    g_active = 2;
+    g_titles[g_active] = L"Profiles";
+    g_urls[g_active] = L"chrome://settings/manageProfile";
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_ABOUT) {
+    g_active = 2;
+    g_titles[g_active] = L"About Windows Chromium";
+    g_urls[g_active] = L"chrome://settings/help";
     PushState();
   }
 }
@@ -164,8 +176,15 @@ int wmain(int argc, wchar_t** argv) {
                   static_cast<unsigned int>(result));
     return result;
   }
-  if (argc > 2 && _wcsicmp(argv[2], L"--settings") == 0) {
+  if (argc > 2) {
     g_active = 2;
+    if (_wcsicmp(argv[2], L"--profiles") == 0) {
+      g_titles[g_active] = L"Profiles";
+      g_urls[g_active] = L"chrome://settings/manageProfile";
+    } else if (_wcsicmp(argv[2], L"--about") == 0) {
+      g_titles[g_active] = L"About Windows Chromium";
+      g_urls[g_active] = L"chrome://settings/help";
+    }
   }
   PushState();
 

@@ -5,6 +5,11 @@ It keeps Chromium's renderer, security model, DevTools, PDF viewer, WebUI
 fallbacks, and extension system while replacing the top-level browser chrome
 with an in-process WinUI 3 XAML Island.
 
+Its tabbed title bar uses the Windows 11 Mica Alt system backdrop. The toolbar
+uses compact native icon controls and a standard WinUI text box so it follows
+Windows interaction and accessibility behavior instead of imitating another
+browser's custom control shapes.
+
 ## Architecture
 
 - `shell/WindowsChromiumShell.vcxproj` builds a self-contained WinUI 3 DLL.
@@ -32,12 +37,14 @@ The preview is a real Win32 host loading the same shell DLL that Chromium uses.
 It supplies representative tab and navigation state so native interactions can
 be tested before a full Chromium relink.
 
-For a deterministic visual-regression capture, pass a PNG output path. Add
-`--settings` to capture the expanded native Settings page:
+For a deterministic visual-regression capture, pass a PNG output path. Add a
+page option to capture an expanded native surface:
 
 ```powershell
 shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\shell.png
 shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\settings.png --settings
+shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\profiles.png --profiles
+shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\about.png --about
 ```
 
 ## Compatibility boundary
