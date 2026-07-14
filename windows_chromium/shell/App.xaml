@@ -10,6 +10,21 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- MenuFlyout does not receive a popup transition automatically
+                 when hosted in a DesktopWindowXamlSource. Keep the native
+                 presenter template/material and add WinUI's built-in popup
+                 transition for toolbar and tab context menus. -->
+            <Style TargetType="MenuFlyoutPresenter"
+                   BasedOn="{StaticResource DefaultMenuFlyoutPresenterStyle}">
+                <Setter Property="Transitions">
+                    <Setter.Value>
+                        <TransitionCollection>
+                            <PopupThemeTransition FromVerticalOffset="-6" />
+                        </TransitionCollection>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

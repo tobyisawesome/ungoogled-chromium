@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include <windows.h>
+#include <dwmapi.h>
 
 #include <array>
 #include <cstdio>
@@ -26,6 +27,8 @@ UpdateWindowState g_update = nullptr;
 DestroyShell g_destroy = nullptr;
 CaptureShell g_capture = nullptr;
 std::wstring g_capture_path;
+
+constexpr int kShellHeightDip = 96;
 
 std::array<std::wstring, 3> g_titles = {
     L"Windows Chromium", L"WinUI 3 documentation", L"Settings"};
@@ -104,8 +107,23 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
       HDC dc = BeginPaint(window, &paint);
       RECT client{};
       GetClientRect(window, &client);
+      const int shell_height =
+          MulDiv(kShellHeightDip, GetDpiForWindow(window), 96);
+      BOOL dark = FALSE;
+      DwmGetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
+                            sizeof(dark));
+      // A transparent XAML island reveals the real parent backdrop in the
+      // browser. Some GDI/Windows.Graphics.Capture paths flatten that backdrop
+      // to white in this standalone host, so provide a theme-matched backing
+      // color for faithful visual-regression screenshots.
+      HBRUSH shell_background = CreateSolidBrush(
+          dark ? RGB(32, 32, 32) : RGB(243, 243, 243));
+      RECT shell_background_rect{0, 0, client.right, shell_height};
+      FillRect(dc, &shell_background_rect, shell_background);
+      DeleteObject(shell_background);
       HBRUSH background = CreateSolidBrush(RGB(250, 250, 250));
-      FillRect(dc, &client, background);
+      RECT content_background{0, shell_height, client.right, client.bottom};
+      FillRect(dc, &content_background, background);
       DeleteObject(background);
       SetBkMode(dc, TRANSPARENT);
       SetTextColor(dc, RGB(72, 72, 72));
@@ -134,7 +152,11 @@ int wmain(int argc, wchar_t** argv) {
   window_class.hInstance = instance;
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   window_class.lpszClassName = L"WindowsChromiumShellPreview";
-  window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  // Leave the shell region unpainted so its transparent XAML base reveals
+  // the parent's DWM Mica Alt backdrop. Chromium uses the same contract when
+  // the native shell replaces the Views toolbar; the page area remains
+  // explicitly painted below it.
+  window_class.hbrBackground = nullptr;
   if (!RegisterClassExW(&window_class)) {
     return static_cast<int>(GetLastError());
   }

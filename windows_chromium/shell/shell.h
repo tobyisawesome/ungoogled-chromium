@@ -32,7 +32,9 @@
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 #include "windows_chromium_shell_api.h"
 
@@ -50,7 +52,7 @@ class Shell final {
   HRESULT Capture(const wchar_t* output_path);
 
  private:
-  using AppBarButton = winrt::Microsoft::UI::Xaml::Controls::AppBarButton;
+  using ToolbarButton = winrt::Microsoft::UI::Xaml::Controls::Button;
   using MenuFlyout = winrt::Microsoft::UI::Xaml::Controls::MenuFlyout;
   using TabViewItem = winrt::Microsoft::UI::Xaml::Controls::TabViewItem;
 
@@ -59,9 +61,9 @@ class Shell final {
   void BuildMenus();
   void ConfigureTitleBar();
   void UpdateTitleBarRegions();
-  AppBarButton MakeGlyphButton(std::wstring_view glyph,
-                               std::wstring_view tooltip,
-                               WcsCommand command);
+  ToolbarButton MakeGlyphButton(std::wstring_view glyph,
+                                std::wstring_view tooltip,
+                                WcsCommand command);
   winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem MakeMenuItem(
       std::wstring_view text,
       WcsCommand command,
@@ -72,6 +74,7 @@ class Shell final {
               const wchar_t* text = nullptr,
               uint32_t event_flags = 0) const;
   void UpdateTabs(const WcsWindowState& state);
+  void UpdateTabShoulders();
   void UpdateNativePage(std::wstring_view url);
   void ResizeIsland();
   void UpdateWindowRegion();
@@ -106,14 +109,17 @@ class Shell final {
       non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Canvas tab_shoulder_layer_{nullptr};
+  winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
+  winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
-  AppBarButton back_button_{nullptr};
-  AppBarButton forward_button_{nullptr};
-  AppBarButton reload_button_{nullptr};
-  AppBarButton profile_button_{nullptr};
-  AppBarButton menu_button_{nullptr};
+  ToolbarButton back_button_{nullptr};
+  ToolbarButton forward_button_{nullptr};
+  ToolbarButton reload_button_{nullptr};
+  ToolbarButton profile_button_{nullptr};
+  ToolbarButton menu_button_{nullptr};
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;

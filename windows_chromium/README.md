@@ -18,7 +18,8 @@ browser's custom control shapes.
 - The island owns the native `TabView`, toolbar, menus, profile entry point, and
   selected native internal pages. Chromium continues to own web contents and
   browser services.
-- The 48 px `TabView` row is the custom title bar. Windows keeps ownership of
+- A 40 px `TabView` strip sits at the bottom of the 48 px custom title-bar row,
+  giving system caption buttons the full row height. Windows keeps ownership of
   Minimize, Maximize, and Close, while the shell marks tab controls as
   non-client passthrough regions and leaves a native drag region beside them.
 - The island window leaves the system caption buttons uncovered and expands

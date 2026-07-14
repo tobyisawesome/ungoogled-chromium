@@ -37,6 +37,8 @@ using winrt::Microsoft::UI::Xaml::HorizontalAlignment;
 using winrt::Microsoft::UI::Xaml::Thickness;
 using winrt::Microsoft::UI::Xaml::VerticalAlignment;
 using winrt::Microsoft::UI::Xaml::Visibility;
+using winrt::Microsoft::UI::Xaml::Media::Brush;
+using winrt::Microsoft::UI::Xaml::Media::SolidColorBrush;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 
 constexpr double kTabRowHeight = 48.0;
@@ -133,6 +135,50 @@ FontIcon Glyph(std::wstring_view glyph, double size = 16.0) {
   icon.Glyph(glyph);
   icon.FontSize(size);
   return icon;
+}
+
+FontIcon ToolbarGlyph(std::wstring_view glyph) {
+  // Let WinUI center the glyph inside the 32 px pointer-state surface. A
+  // manual baseline shift moves the ink away from the Button's actual center
+  // and makes the hover shape appear offset even when its bounds are correct.
+  return Glyph(glyph, 16.0);
+}
+
+Brush ThemeBrush(std::wstring_view key,
+                 winrt::Windows::UI::Color fallback) {
+  try {
+    const auto value =
+        winrt::Microsoft::UI::Xaml::Application::Current()
+            .Resources()
+            .Lookup(winrt::box_value(winrt::hstring{key}));
+    if (const auto brush = value.try_as<Brush>()) {
+      return brush;
+    }
+  } catch (...) {
+  }
+  return SolidColorBrush{fallback};
+}
+
+winrt::Microsoft::UI::Xaml::Media::Geometry TabShoulderGeometry(bool left) {
+  using namespace winrt::Microsoft::UI::Xaml::Media;
+  using winrt::Windows::Foundation::Point;
+
+  PathGeometry geometry;
+  PathFigure figure;
+  figure.StartPoint(left ? Point{8, 0} : Point{0, 0});
+  figure.IsClosed(true);
+
+  BezierSegment curve;
+  curve.Point1(left ? Point{8, 4.418f} : Point{0, 4.418f});
+  curve.Point2(left ? Point{4.418f, 8} : Point{3.582f, 8});
+  curve.Point3(left ? Point{0, 8} : Point{8, 8});
+  figure.Segments().Append(curve);
+
+  LineSegment bottom;
+  bottom.Point(left ? Point{8, 8} : Point{0, 8});
+  figure.Segments().Append(bottom);
+  geometry.Figures().Append(figure);
+  return geometry.as<Geometry>();
 }
 
 Border MakeSettingsCard(std::wstring_view title,
@@ -254,13 +300,50 @@ void Shell::BuildVisualTree() {
   tab_view_.CanDragTabs(true);
   tab_view_.CanReorderTabs(true);
   tab_view_.TabWidthMode(TabViewWidthMode::SizeToContent);
+  // The custom title bar uses the 48 px tall system-caption metric so the
+  // caption buttons span the complete row. Keep TabView's familiar 40 px
+  // strip bottom-aligned, preserving the 8 px Explorer-style top inset while
+  // its selected item and shoulders sink directly into the command layer.
   tab_view_.Height(40);
   tab_view_.Padding(Thickness{0});
   tab_view_.VerticalAlignment(VerticalAlignment::Bottom);
   Grid::SetRow(tab_view_, 0);
   root_.Children().Append(tab_view_);
   tab_view_.SizeChanged(
-      [this](const auto&, const auto&) { UpdateTitleBarRegions(); });
+      [this](const auto&, const auto&) {
+        UpdateTitleBarRegions();
+        UpdateTabShoulders();
+      });
+
+  tab_shoulder_layer_ = Canvas{};
+  tab_shoulder_layer_.IsHitTestVisible(false);
+  tab_shoulder_layer_.HorizontalAlignment(HorizontalAlignment::Stretch);
+  tab_shoulder_layer_.VerticalAlignment(VerticalAlignment::Stretch);
+  Grid::SetRow(tab_shoulder_layer_, 0);
+
+  left_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
+  left_tab_shoulder_.Width(8);
+  left_tab_shoulder_.Height(8);
+  left_tab_shoulder_.Stretch(
+      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
+  left_tab_shoulder_.Data(TabShoulderGeometry(true));
+  left_tab_shoulder_.Visibility(Visibility::Collapsed);
+  tab_shoulder_layer_.Children().Append(left_tab_shoulder_);
+
+  right_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
+  right_tab_shoulder_.Width(8);
+  right_tab_shoulder_.Height(8);
+  right_tab_shoulder_.Stretch(
+      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
+  right_tab_shoulder_.Data(TabShoulderGeometry(false));
+  right_tab_shoulder_.Visibility(Visibility::Collapsed);
+  tab_shoulder_layer_.Children().Append(right_tab_shoulder_);
+
+  // Put the connector below TabView so native text, close buttons, separators,
+  // and pointer states remain entirely owned by the control. The material
+  // wedges remain visible only in the transparent space beside the selected
+  // item and never participate in hit testing.
+  root_.Children().InsertAt(0, tab_shoulder_layer_);
 
   tab_view_.AddTabButtonClick([this](const TabView&, const auto&) {
     if (!updating_) {
@@ -268,6 +351,7 @@ void Shell::BuildVisualTree() {
     }
   });
   tab_view_.SelectionChanged([this](const auto&, const auto&) {
+    UpdateTabShoulders();
     if (updating_) {
       return;
     }
@@ -304,14 +388,19 @@ void Shell::BuildVisualTree() {
   root_.Children().Append(native_page_host_);
 }
 
-Shell::AppBarButton Shell::MakeGlyphButton(std::wstring_view glyph,
-                                           std::wstring_view tooltip,
-                                           WcsCommand command) {
-  AppBarButton button;
-  button.Icon(Glyph(glyph, 18));
-  button.IsCompact(true);
-  button.Width(40);
-  button.Height(40);
+Shell::ToolbarButton Shell::MakeGlyphButton(std::wstring_view glyph,
+                                            std::wstring_view tooltip,
+                                            WcsCommand command) {
+  Button button;
+  button.Content(ToolbarGlyph(glyph));
+  // A native Button with an icon-only surface is the WinUI pattern that
+  // matches Explorer's standalone toolbar controls. Its 32 px state shape
+  // aligns exactly with the TextBox; the surrounding 40 px grid cell retains
+  // the comfortable command spacing without inheriting CommandBar geometry.
+  button.Width(32);
+  button.Height(32);
+  button.HorizontalAlignment(HorizontalAlignment::Center);
+  button.VerticalAlignment(VerticalAlignment::Center);
   button.Padding(Thickness{0});
   button.Margin(Thickness{0});
   button.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
@@ -461,8 +550,8 @@ HRESULT Shell::Update(const WcsWindowState& state) {
     UpdateTabs(state);
     back_button_.IsEnabled(state.can_go_back != 0);
     forward_button_.IsEnabled(state.can_go_forward != 0);
-    profile_button_.Icon(Glyph(state.is_incognito ? L"\uE727" : L"\uE77B",
-                               18));
+    profile_button_.Content(
+        ToolbarGlyph(state.is_incognito ? L"\uE727" : L"\uE77B"));
     ToolTipService::SetToolTip(
         profile_button_,
         winrt::box_value(state.profile_name ? state.profile_name : L"Profiles"));
@@ -491,6 +580,8 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       item.Tag(winrt::box_value(tab.tab_id));
       item.IsClosable(true);
       item.Height(40);
+      item.SizeChanged(
+          [this](const auto&, const auto&) { UpdateTabShoulders(); });
 
       MenuFlyout context_menu;
       context_menu.Items().Append(
@@ -555,6 +646,37 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
 
   UpdateNativePage(active_url_);
   UpdateTitleBarRegions();
+  UpdateTabShoulders();
+}
+
+void Shell::UpdateTabShoulders() {
+  if (!left_tab_shoulder_ || !right_tab_shoulder_ || !root_) {
+    return;
+  }
+  try {
+    const auto selected = tab_view_.SelectedItem().try_as<TabViewItem>();
+    if (!selected || selected.ActualWidth() <= 0 ||
+        selected.ActualHeight() <= 0) {
+      left_tab_shoulder_.Visibility(Visibility::Collapsed);
+      right_tab_shoulder_.Visibility(Visibility::Collapsed);
+      return;
+    }
+
+    const auto origin = selected.TransformToVisual(root_).TransformPoint(
+        winrt::Windows::Foundation::Point{0, 0});
+    const double shoulder_top =
+        std::min(kTabRowHeight, origin.Y + selected.ActualHeight()) - 8.0;
+    Canvas::SetLeft(left_tab_shoulder_, origin.X - 8.0);
+    Canvas::SetTop(left_tab_shoulder_, shoulder_top);
+    Canvas::SetLeft(right_tab_shoulder_,
+                    origin.X + selected.ActualWidth());
+    Canvas::SetTop(right_tab_shoulder_, shoulder_top);
+    left_tab_shoulder_.Visibility(Visibility::Visible);
+    right_tab_shoulder_.Visibility(Visibility::Visible);
+  } catch (...) {
+    left_tab_shoulder_.Visibility(Visibility::Collapsed);
+    right_tab_shoulder_.Visibility(Visibility::Collapsed);
+  }
 }
 
 void Shell::UpdateTitleBarRegions() {
@@ -636,6 +758,11 @@ void Shell::UpdateNativePage(std::wstring_view url) {
 
   ScrollViewer scroll;
   scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);
+  winrt::Microsoft::UI::Xaml::Media::Animation::TransitionCollection
+      page_transitions;
+  page_transitions.Append(
+      winrt::Microsoft::UI::Xaml::Media::Animation::EntranceThemeTransition{});
+  scroll.Transitions(page_transitions);
   StackPanel page;
   page.MaxWidth(920);
   page.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -867,19 +994,37 @@ void Shell::ApplySystemTheme() {
       title_bar_.ButtonInactiveForegroundColor(color_reference(
           dark ? Color(255, 255, 255, 154) : Color(0, 0, 0, 154)));
     }
-    // Keep the base translucent so the parent's Mica Alt backdrop remains
-    // visible. The toolbar is the commanding layer and native pages are the
-    // content layer recommended for tabbed Windows 11 applications.
-    root_.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-        dark ? Color(32, 32, 32, 196) : Color(243, 243, 243, 196)});
-    tab_view_.Background(
-        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-            Color(0, 0, 0, 0)});
-    toolbar_.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-        dark ? Color(32, 32, 32, 218) : Color(243, 243, 243, 218)});
-    native_page_host_.Background(
-        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
-            dark ? Color(28, 28, 28, 242) : Color(249, 249, 249, 242)});
+    // Mica Alt is the base layer. File Explorer puts a Fluent commanding
+    // layer over it, then uses that exact same material for the selected tab.
+    // Sharing one brush instance also lets TabView's native lower arcs merge
+    // into the toolbar instead of reading as a flat seam between two colors.
+    const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
+    const auto commanding_layer = ThemeBrush(
+        L"LayerOnMicaBaseAltFillColorDefaultBrush",
+        dark ? Color(58, 58, 58, 115) : Color(255, 255, 255, 179));
+    const auto content_layer = ThemeBrush(
+        L"LayerFillColorDefaultBrush",
+        dark ? Color(58, 58, 58, 76) : Color(255, 255, 255, 128));
+
+    root_.Background(transparent);
+    tab_view_.Background(transparent);
+    toolbar_.Background(commanding_layer);
+    native_page_host_.Background(content_layer);
+    left_tab_shoulder_.Fill(commanding_layer);
+    right_tab_shoulder_.Fill(commanding_layer);
+
+    const auto selected_key =
+        winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
+    const auto drag_key =
+        winrt::box_value(winrt::hstring{L"TabViewItemHeaderDragBackground"});
+    const auto shoulder_key =
+        winrt::box_value(winrt::hstring{L"TabViewBorderBrush"});
+    tab_view_.Resources().Insert(selected_key, commanding_layer);
+    tab_view_.Resources().Insert(drag_key, commanding_layer);
+    // TabView uses this brush for its 4 px lower radius paths. Matching the
+    // commanding layer turns those native paths into visible material
+    // shoulders instead of a low-contrast stroke at the tab/toolbar join.
+    tab_view_.Resources().Insert(shoulder_key, commanding_layer);
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }
