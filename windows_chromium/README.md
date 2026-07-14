@@ -1,6 +1,6 @@
-# Windows Chromium
+# Curve Browser
 
-Windows Chromium is a Windows 11-native browser shell for ungoogled-chromium.
+Curve Browser is a Windows 11-native browser shell for ungoogled-chromium.
 It keeps Chromium's renderer, security model, DevTools, PDF viewer, WebUI
 fallbacks, and extension system while replacing the top-level browser chrome
 with an in-process WinUI 3 XAML Island.

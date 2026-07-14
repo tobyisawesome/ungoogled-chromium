@@ -31,9 +31,9 @@ std::wstring g_capture_path;
 constexpr int kShellHeightDip = 96;
 
 std::array<std::wstring, 3> g_titles = {
-    L"Windows Chromium", L"WinUI 3 documentation", L"Settings"};
+    L"Curve Browser", L"WinUI 3 documentation", L"Settings"};
 std::array<std::wstring, 3> g_urls = {
-    L"https://windowschromium.local/", L"https://learn.microsoft.com/windows/apps/winui/",
+    L"https://curvebrowser.local/", L"https://learn.microsoft.com/windows/apps/winui/",
     L"chrome://settings/"};
 int g_active = 0;
 
@@ -81,7 +81,7 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
     PushState();
   } else if (args->command == WCS_COMMAND_OPEN_ABOUT) {
     g_active = 2;
-    g_titles[g_active] = L"About Windows Chromium";
+    g_titles[g_active] = L"About Curve Browser";
     g_urls[g_active] = L"chrome://settings/help";
     PushState();
   }
@@ -162,7 +162,7 @@ int wmain(int argc, wchar_t** argv) {
   }
 
   HWND window = CreateWindowExW(
-      0, window_class.lpszClassName, L"Windows Chromium — WinUI 3 Shell Preview",
+      0, window_class.lpszClassName, L"Curve Browser — WinUI 3 Shell Preview",
       WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr,
       nullptr, instance, nullptr);
   if (!window) {
@@ -204,7 +204,7 @@ int wmain(int argc, wchar_t** argv) {
       g_titles[g_active] = L"Profiles";
       g_urls[g_active] = L"chrome://settings/manageProfile";
     } else if (_wcsicmp(argv[2], L"--about") == 0) {
-      g_titles[g_active] = L"About Windows Chromium";
+      g_titles[g_active] = L"About Curve Browser";
       g_urls[g_active] = L"chrome://settings/help";
     }
   }

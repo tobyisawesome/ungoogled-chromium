@@ -521,7 +521,7 @@ void Shell::BuildMenus() {
   app_menu_.Items().Append(
       MakeMenuItem(L"Settings", WCS_COMMAND_OPEN_SETTINGS));
   app_menu_.Items().Append(
-      MakeMenuItem(L"About Windows Chromium", WCS_COMMAND_OPEN_ABOUT));
+      MakeMenuItem(L"About Curve Browser", WCS_COMMAND_OPEN_ABOUT));
   app_menu_.Items().Append(MakeMenuItem(L"Exit", WCS_COMMAND_EXIT));
   menu_button_.Click(
       [this](const auto&, const auto&) { app_menu_.ShowAt(menu_button_); });
@@ -732,7 +732,7 @@ std::wstring Shell::NativePageTitle(std::wstring_view url) const {
     return L"Profiles";
   }
   if (StartsWithInsensitive(url, L"chrome://settings/help")) {
-    return L"About Windows Chromium";
+    return L"About Curve Browser";
   }
   if (StartsWithInsensitive(url, L"chrome://downloads")) return L"Downloads";
   if (StartsWithInsensitive(url, L"chrome://history")) return L"History";
@@ -816,7 +816,7 @@ void Shell::UpdateNativePage(std::wstring_view url) {
         Color(16, 124, 16)});
     page.Children().Append(MakeSettingsCard(
         L"Updates",
-        L"Update checks use the Windows Chromium release channel and never require a Google account.",
+        L"Update checks use the Curve Browser release channel and never require a Google account.",
         updates));
   } else if (StartsWithInsensitive(url, L"chrome://settings")) {
     ToggleSwitch privacy;
@@ -829,7 +829,7 @@ void Shell::UpdateNativePage(std::wstring_view url) {
     startup.IsOn(false);
     page.Children().Append(MakeSettingsCard(
         L"Continue where you left off",
-        L"Restore your local windows and tabs when Windows Chromium starts.",
+        L"Restore your local windows and tabs when Curve Browser starts.",
         startup));
     ComboBox search;
     search.MinWidth(180);
@@ -917,7 +917,7 @@ winrt::fire_and_forget Shell::CaptureAsync(std::wstring output_path) {
     co_await encoder.FlushAsync();
     co_await stream.FlushAsync();
   } catch (const winrt::hresult_error& error) {
-    std::wstring message = L"Windows Chromium shell capture failed: ";
+    std::wstring message = L"Curve Browser shell capture failed: ";
     message.append(error.message().c_str());
     message.push_back(L'\n');
     OutputDebugStringW(message.c_str());
