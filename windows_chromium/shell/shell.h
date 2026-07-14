@@ -24,6 +24,8 @@
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Input.h>
+#include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -55,6 +57,8 @@ class Shell final {
   void BuildVisualTree();
   void BuildToolbar();
   void BuildMenus();
+  void ConfigureTitleBar();
+  void UpdateTitleBarRegions();
   AppBarButton MakeGlyphButton(std::wstring_view glyph,
                                std::wstring_view tooltip,
                                WcsCommand command);
@@ -97,6 +101,9 @@ class Shell final {
 
   winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{
       nullptr};
+  winrt::Microsoft::UI::Windowing::AppWindowTitleBar title_bar_{nullptr};
+  winrt::Microsoft::UI::Input::InputNonClientPointerSource
+      non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};

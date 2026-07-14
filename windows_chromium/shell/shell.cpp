@@ -8,6 +8,8 @@
 #include "App.xaml.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <cwctype>
 #include <filesystem>
@@ -181,6 +183,7 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   }
 
   EnsureThreadRuntime();
+  ConfigureTitleBar();
   BuildVisualTree();
 
   xaml_source_ =
@@ -207,10 +210,31 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
 
 Shell::~Shell() {
   DetachWindowSubclass();
+  if (non_client_pointer_source_) {
+    non_client_pointer_source_.ClearAllRegionRects();
+  }
+  if (title_bar_) {
+    title_bar_.ResetToDefault();
+  }
   if (xaml_source_) {
     xaml_source_.Content(nullptr);
     xaml_source_.Close();
   }
+}
+
+void Shell::ConfigureTitleBar() {
+  using namespace winrt::Microsoft::UI::Windowing;
+  if (!AppWindowTitleBar::IsCustomizationSupported()) {
+    return;
+  }
+
+  const auto window_id = winrt::Microsoft::UI::GetWindowIdFromWindow(parent_);
+  title_bar_ = AppWindow::GetFromWindowId(window_id).TitleBar();
+  title_bar_.ExtendsContentIntoTitleBar(true);
+  title_bar_.PreferredHeightOption(TitleBarHeightOption::Tall);
+  non_client_pointer_source_ =
+      winrt::Microsoft::UI::Input::InputNonClientPointerSource::
+          GetForWindowId(window_id);
 }
 
 void Shell::BuildVisualTree() {
@@ -230,10 +254,13 @@ void Shell::BuildVisualTree() {
   tab_view_.CanDragTabs(true);
   tab_view_.CanReorderTabs(true);
   tab_view_.TabWidthMode(TabViewWidthMode::SizeToContent);
-  tab_view_.Padding(Thickness{8, 0, 0, 0});
-  tab_view_.Margin(Thickness{0, 6, 0, 0});
+  tab_view_.Height(40);
+  tab_view_.Padding(Thickness{0});
+  tab_view_.VerticalAlignment(VerticalAlignment::Bottom);
   Grid::SetRow(tab_view_, 0);
   root_.Children().Append(tab_view_);
+  tab_view_.SizeChanged(
+      [this](const auto&, const auto&) { UpdateTitleBarRegions(); });
 
   tab_view_.AddTabButtonClick([this](const TabView&, const auto&) {
     if (!updating_) {
@@ -334,10 +361,8 @@ void Shell::BuildToolbar() {
 
   address_box_ = TextBox{};
   address_box_.PlaceholderText(L"Search or enter an address");
-  address_box_.VerticalContentAlignment(VerticalAlignment::Center);
   address_box_.Height(32);
   address_box_.Margin(Thickness{4, 0, 8, 0});
-  address_box_.Padding(Thickness{12, 0, 12, 0});
   Grid::SetColumn(address_box_, 3);
   toolbar_.Children().Append(address_box_);
   address_box_.KeyDown(
@@ -465,6 +490,7 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       item = TabViewItem{};
       item.Tag(winrt::box_value(tab.tab_id));
       item.IsClosable(true);
+      item.Height(40);
 
       MenuFlyout context_menu;
       context_menu.Items().Append(
@@ -528,6 +554,44 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
   }
 
   UpdateNativePage(active_url_);
+  UpdateTitleBarRegions();
+}
+
+void Shell::UpdateTitleBarRegions() {
+  if (!non_client_pointer_source_ || !IsWindow(parent_)) {
+    return;
+  }
+
+  RECT client{};
+  GetClientRect(parent_, &client);
+  const UINT dpi = GetDpiForWindow(parent_);
+  const double scale = static_cast<double>(dpi) / 96.0;
+  double interactive_width_dip = 48.0;  // Add-tab button.
+  for (const auto& [tab_id, item] : tab_items_) {
+    (void)tab_id;
+    interactive_width_dip +=
+        item.ActualWidth() > 0 ? item.ActualWidth() : 160.0;
+  }
+
+  const int right_inset = title_bar_ ? title_bar_.RightInset() : 0;
+  const int minimum_drag_width = static_cast<int>(48.0 * scale + 0.5);
+  const int maximum_passthrough =
+      std::max(0, static_cast<int>(client.right) - right_inset -
+                      minimum_drag_width);
+  const int passthrough_width = std::clamp(
+      static_cast<int>(std::ceil(interactive_width_dip * scale)), 0,
+      maximum_passthrough);
+  const int title_height = static_cast<int>(kTabRowHeight * scale + 0.5);
+
+  non_client_pointer_source_.ClearRegionRects(
+      winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough);
+  if (passthrough_width > 0) {
+    const std::array rectangles = {winrt::Windows::Graphics::RectInt32{
+        0, 0, passthrough_width, title_height}};
+    non_client_pointer_source_.SetRegionRects(
+        winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough,
+        rectangles);
+  }
 }
 
 bool Shell::IsNativePage(std::wstring_view url) const {
@@ -758,7 +822,9 @@ void Shell::UpdateWindowRegion() {
   const UINT dpi = GetDpiForWindow(parent_);
   const double scale = static_cast<double>(dpi) / 96.0;
   const int tab_height = static_cast<int>(kTabRowHeight * scale + 0.5);
-  const int caption_width = GetSystemMetricsForDpi(SM_CXSIZE, dpi) * 3;
+  const int caption_width = title_bar_
+                                ? title_bar_.RightInset()
+                                : GetSystemMetricsForDpi(SM_CXSIZE, dpi) * 3;
   const int top_width =
       std::max(0, static_cast<int>(bounds.right) - caption_width);
   HRGN top = CreateRectRgn(0, 0, top_width, tab_height);
@@ -776,6 +842,31 @@ void Shell::ApplySystemTheme() {
     const bool dark = (static_cast<int>(background.R) + background.G +
                        background.B) < 384;
     root_.RequestedTheme(dark ? ElementTheme::Dark : ElementTheme::Light);
+    const BOOL dark_mode = dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(parent_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode,
+                          sizeof(dark_mode));
+    if (title_bar_) {
+      using winrt::Microsoft::UI::Windowing::TitleBarTheme;
+      title_bar_.PreferredTheme(dark ? TitleBarTheme::Dark
+                                     : TitleBarTheme::Light);
+      const auto color_reference = [](winrt::Windows::UI::Color value) {
+        return winrt::box_value(value)
+            .as<winrt::Windows::Foundation::IReference<
+                winrt::Windows::UI::Color>>();
+      };
+      title_bar_.ButtonBackgroundColor(
+          color_reference(Color(0, 0, 0, 0)));
+      title_bar_.ButtonInactiveBackgroundColor(
+          color_reference(Color(0, 0, 0, 0)));
+      title_bar_.ButtonHoverBackgroundColor(color_reference(
+          dark ? Color(255, 255, 255, 20) : Color(0, 0, 0, 16)));
+      title_bar_.ButtonPressedBackgroundColor(color_reference(
+          dark ? Color(255, 255, 255, 32) : Color(0, 0, 0, 28)));
+      title_bar_.ButtonForegroundColor(color_reference(
+          dark ? Color(255, 255, 255) : Color(0, 0, 0)));
+      title_bar_.ButtonInactiveForegroundColor(color_reference(
+          dark ? Color(255, 255, 255, 154) : Color(0, 0, 0, 154)));
+    }
     // Keep the base translucent so the parent's Mica Alt backdrop remains
     // visible. The toolbar is the commanding layer and native pages are the
     // content layer recommended for tabbed Windows 11 applications.
