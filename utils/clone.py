@@ -102,10 +102,15 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     if iswin:
         (dtpath / 'git.bat').write_text('git')
     # Apply changes to gclient
+    # depot_tools eventually forwards these values to hooks that can run
+    # through MSYS on Windows. Forward slashes preserve the drive-qualified
+    # path instead of treating ``C:\\...`` as a relative ``C`` directory.
+    gclient_output = args.output.as_posix()
+    gclient_staging = ucstaging.as_posix()
     run(['git', 'apply', '--ignore-whitespace'],
         input=Path(__file__).with_name('depot_tools.patch').read_text(encoding=ENCODING).replace(
-            'UC_OUT', str(args.output)).replace('UC_STAGING',
-                                                str(ucstaging)).replace('GSUVER', gsuver),
+            'UC_OUT', gclient_output).replace('UC_STAGING', gclient_staging).replace(
+                'GSUVER', gsuver),
         cwd=dtpath,
         check=True,
         universal_newlines=True)
@@ -151,7 +156,6 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     # .gclient is executable Python. POSIX separators avoid turning Windows
     # paths such as ``C:\\Users`` into invalid escape sequences (notably
     # ``\\U``) while remaining valid for depot_tools on Windows.
-    gclient_output = args.output.as_posix()
     if args.custom_config:
         custom_config = Path(args.custom_config).read_text(encoding=ENCODING)
         (ucstaging / '.gclient').write_text(
