@@ -11,7 +11,7 @@ Module for cloning the source tree.
 import re
 import sys
 from argparse import ArgumentParser
-from os import environ, pathsep
+from os import chdir, environ, pathsep
 from pathlib import Path
 from shutil import copytree, copy, move
 from stat import S_IWRITE
@@ -49,6 +49,19 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     """Clones, downloads, and generates the required sources"""
     get_logger().info('Setting up cloning environment')
     iswin = sys.platform.startswith('win')
+    # depot_tools uses ':' as a delimiter in GCS dependency names. An absolute
+    # Windows solution name such as ``C:/build/src`` is therefore truncated to
+    # ``C`` when node_modules is unpacked. Anchor the process at the output
+    # parent and keep the gclient solution name relative instead.
+    if iswin and args.output.is_absolute():
+        output = args.output.expanduser().resolve()
+        if not output.name:
+            raise ValueError('The Chromium output must not be a drive root')
+        if args.custom_config:
+            args.custom_config = args.custom_config.expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        chdir(output.parent)
+        args.output = Path(output.name)
     chromium_version = get_chromium_version()
     ucstaging = args.output / 'uc_staging'
     dtpath = ucstaging / 'depot_tools'
@@ -102,9 +115,9 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     if iswin:
         (dtpath / 'git.bat').write_text('git')
     # Apply changes to gclient
-    # depot_tools eventually forwards these values to hooks that can run
-    # through MSYS on Windows. Forward slashes preserve the drive-qualified
-    # path instead of treating ``C:\\...`` as a relative ``C`` directory.
+    # Use slash-safe literals in the generated Python patch. On Windows the
+    # output path has already been made relative so it cannot collide with the
+    # GCS dependency-name delimiter.
     gclient_output = args.output.as_posix()
     gclient_staging = ucstaging.as_posix()
     run(['git', 'apply', '--ignore-whitespace'],
