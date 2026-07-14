@@ -18,6 +18,9 @@
 #endif
 
 #include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
@@ -27,6 +30,7 @@
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 
 #include "windows_chromium_shell_api.h"
 
@@ -41,6 +45,7 @@ class Shell final {
 
   HRESULT Update(const WcsWindowState& state);
   void SetVisible(bool visible);
+  HRESULT Capture(const wchar_t* output_path);
 
  private:
   using Button = winrt::Microsoft::UI::Xaml::Controls::Button;
@@ -71,6 +76,7 @@ class Shell final {
   std::wstring NativePageTitle(std::wstring_view url) const;
   void AttachWindowSubclass();
   void DetachWindowSubclass();
+  winrt::fire_and_forget CaptureAsync(std::wstring output_path);
 
   static LRESULT CALLBACK ParentSubclassProc(HWND window,
                                               UINT message,

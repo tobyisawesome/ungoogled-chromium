@@ -16,5 +16,6 @@ __pycache__/
 /windows_chromium/shell/.vs/
 /windows_chromium/shell/obj/
 /windows_chromium/shell/out/
+/windows_chromium/shell/Generated Files/
 /windows_chromium/shell/packages/
 /windows_chromium/shell/packages-resolved/

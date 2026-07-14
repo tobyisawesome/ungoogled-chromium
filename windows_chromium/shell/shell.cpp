@@ -1,11 +1,16 @@
 // Copyright 2026 The Windows Chromium Authors
 // SPDX-License-Identifier: BSD-3-Clause
 
+#include "pch.h"
+
 #include "shell.h"
+
+#include "App.xaml.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cwctype>
+#include <filesystem>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -57,11 +62,11 @@ struct ThreadRuntime {
       throw;
     }
     try {
-      xaml_manager =
-          winrt::Microsoft::UI::Xaml::Hosting::WindowsXamlManager::
-              InitializeForCurrentThread();
+      application = winrt::make<
+          winrt::WindowsChromiumShell::implementation::App>();
     } catch (const winrt::hresult_error& error) {
-      std::fwprintf(stderr, L"WindowsXamlManager initialization failed: 0x%08X\n",
+      std::fwprintf(stderr,
+                    L"WinUI Application initialization failed: 0x%08X\n",
                     static_cast<unsigned int>(error.code().value));
       throw;
     }
@@ -69,7 +74,7 @@ struct ThreadRuntime {
 
   winrt::Microsoft::UI::Dispatching::DispatcherQueueController dispatcher{
       nullptr};
-  winrt::Microsoft::UI::Xaml::Hosting::WindowsXamlManager xaml_manager{nullptr};
+  winrt::Windows::Foundation::IInspectable application{nullptr};
 };
 
 thread_local std::unique_ptr<ThreadRuntime> g_thread_runtime;
@@ -621,6 +626,61 @@ void Shell::SetVisible(bool visible) {
   }
 }
 
+HRESULT Shell::Capture(const wchar_t* output_path) {
+  if (!output_path || !*output_path) {
+    return E_INVALIDARG;
+  }
+  try {
+    CaptureAsync(output_path);
+    return S_OK;
+  } catch (...) {
+    return winrt::to_hresult();
+  }
+}
+
+winrt::fire_and_forget Shell::CaptureAsync(std::wstring output_path) {
+  try {
+    winrt::Microsoft::UI::Xaml::Media::Imaging::RenderTargetBitmap bitmap;
+    co_await bitmap.RenderAsync(root_);
+    const int32_t width = bitmap.PixelWidth();
+    const int32_t height = bitmap.PixelHeight();
+    if (width <= 0 || height <= 0) {
+      co_return;
+    }
+
+    const auto buffer = co_await bitmap.GetPixelsAsync();
+    std::vector<uint8_t> pixels(buffer.Length());
+    auto reader = winrt::Windows::Storage::Streams::DataReader::FromBuffer(
+        buffer);
+    reader.ReadBytes(pixels);
+
+    const std::filesystem::path destination(output_path);
+    const auto folder = co_await winrt::Windows::Storage::StorageFolder::
+        GetFolderFromPathAsync(destination.parent_path().wstring());
+    const auto file = co_await folder.CreateFileAsync(
+        destination.filename().wstring(),
+        winrt::Windows::Storage::CreationCollisionOption::ReplaceExisting);
+    const auto stream = co_await file.OpenAsync(
+        winrt::Windows::Storage::FileAccessMode::ReadWrite);
+    const auto encoder =
+        co_await winrt::Windows::Graphics::Imaging::BitmapEncoder::CreateAsync(
+            winrt::Windows::Graphics::Imaging::BitmapEncoder::PngEncoderId(),
+            stream);
+    encoder.SetPixelData(
+        winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8,
+        winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied,
+        width, height, 96.0, 96.0, pixels);
+    co_await encoder.FlushAsync();
+    co_await stream.FlushAsync();
+  } catch (const winrt::hresult_error& error) {
+    std::wstring message = L"Windows Chromium shell capture failed: ";
+    message.append(error.message().c_str());
+    message.push_back(L'\n');
+    OutputDebugStringW(message.c_str());
+    std::fwprintf(stderr, L"%ls", message.c_str());
+  }
+}
+
 void Shell::ResizeIsland() {
   if (!island_window_ || !IsWindow(parent_)) {
     return;
@@ -750,4 +810,12 @@ extern "C" void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible) {
   if (shell) {
     static_cast<windows_chromium::Shell*>(shell)->SetVisible(visible != FALSE);
   }
+}
+
+extern "C" HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
+                                               const wchar_t* output_path) {
+  if (!shell) {
+    return E_INVALIDARG;
+  }
+  return static_cast<windows_chromium::Shell*>(shell)->Capture(output_path);
 }

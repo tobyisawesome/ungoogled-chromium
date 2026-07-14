@@ -32,6 +32,14 @@ The preview is a real Win32 host loading the same shell DLL that Chromium uses.
 It supplies representative tab and navigation state so native interactions can
 be tested before a full Chromium relink.
 
+For a deterministic visual-regression capture, pass a PNG output path. Add
+`--settings` to capture the expanded native Settings page:
+
+```powershell
+shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\shell.png
+shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\settings.png --settings
+```
+
 ## Compatibility boundary
 
 Normal URLs, diagnostics pages, DevTools, the PDF viewer, security

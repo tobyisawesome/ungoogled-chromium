@@ -106,6 +106,10 @@ WCS_EXPORT HRESULT __stdcall WcsUpdateWindowState(
     WcsShellHandle shell,
     const WcsWindowState* state);
 WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
+// Renders the live XAML visual tree to a PNG for visual regression testing.
+// The operation is asynchronous; callers may watch for the output file.
+WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
+                                             const wchar_t* output_path);
 
 }  // extern "C"
 

@@ -18,11 +18,14 @@ using DestroyShell = void(__stdcall*)(WcsShellHandle);
 using UpdateWindowState = HRESULT(__stdcall*)(WcsShellHandle,
                                               const WcsWindowState*);
 using PreTranslateMessage = BOOL(WINAPI*)(MSG*);
+using CaptureShell = HRESULT(__stdcall*)(WcsShellHandle, const wchar_t*);
 
 HMODULE g_shell_module = nullptr;
 WcsShellHandle g_shell = nullptr;
 UpdateWindowState g_update = nullptr;
 DestroyShell g_destroy = nullptr;
+CaptureShell g_capture = nullptr;
+std::wstring g_capture_path;
 
 std::array<std::wstring, 3> g_titles = {
     L"Windows Chromium", L"WinUI 3 documentation", L"Settings"};
@@ -72,6 +75,18 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
                             LPARAM lparam) {
   switch (message) {
+    case WM_TIMER:
+      if (wparam == 1 && g_capture && g_shell && !g_capture_path.empty()) {
+        std::fwprintf(stderr, L"Capturing WinUI shell to %ls\n",
+                      g_capture_path.c_str());
+        KillTimer(window, 1);
+        const HRESULT result = g_capture(g_shell, g_capture_path.c_str());
+        if (FAILED(result)) {
+          std::fwprintf(stderr, L"WcsCaptureShell failed: 0x%08X\n",
+                        static_cast<unsigned int>(result));
+        }
+      }
+      return 0;
     case WM_PAINT: {
       PAINTSTRUCT paint{};
       HDC dc = BeginPaint(window, &paint);
@@ -100,7 +115,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
 
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
   HINSTANCE instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW window_class{sizeof(window_class)};
   window_class.lpfnWndProc = WindowProc;
@@ -129,12 +144,14 @@ int wmain() {
       GetProcAddress(g_shell_module, "WcsGetApiVersion"));
   const auto create = reinterpret_cast<CreateShell>(
       GetProcAddress(g_shell_module, "WcsCreateShell"));
+  g_capture = reinterpret_cast<CaptureShell>(
+      GetProcAddress(g_shell_module, "WcsCaptureShell"));
   g_update = reinterpret_cast<UpdateWindowState>(
       GetProcAddress(g_shell_module, "WcsUpdateWindowState"));
   g_destroy = reinterpret_cast<DestroyShell>(
       GetProcAddress(g_shell_module, "WcsDestroyShell"));
   if (!get_version || get_version() != WCS_API_VERSION || !create ||
-      !g_update || !g_destroy) {
+      !g_update || !g_destroy || !g_capture) {
     std::fwprintf(stderr, L"Shell API mismatch\n");
     return ERROR_REVISION_MISMATCH;
   }
@@ -147,10 +164,19 @@ int wmain() {
                   static_cast<unsigned int>(result));
     return result;
   }
+  if (argc > 2 && _wcsicmp(argv[2], L"--settings") == 0) {
+    g_active = 2;
+  }
   PushState();
 
   ShowWindow(window, SW_SHOWDEFAULT);
   UpdateWindow(window);
+  if (argc > 1) {
+    g_capture_path = argv[1];
+    const UINT_PTR timer = SetTimer(window, 1, 750, nullptr);
+    std::fwprintf(stderr, L"WinUI capture timer: %llu\n",
+                  static_cast<unsigned long long>(timer));
+  }
 
   HMODULE windowing = GetModuleHandleW(L"Microsoft.UI.Windowing.Core.dll");
   const auto pre_translate = windowing
@@ -159,6 +185,10 @@ int wmain() {
       : nullptr;
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    if (message.hwnd == window && message.message == WM_TIMER) {
+      DispatchMessageW(&message);
+      continue;
+    }
     if (pre_translate && pre_translate(&message)) {
       continue;
     }
