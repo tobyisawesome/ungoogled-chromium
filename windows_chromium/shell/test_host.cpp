@@ -35,6 +35,7 @@ std::array<std::wstring, 3> g_urls = {
     L"https://curvebrowser.local/", L"https://learn.microsoft.com/windows/apps/winui/",
     L"chrome://settings/"};
 int g_active = 0;
+bool g_restore_on_startup = true;
 
 void PushState() {
   std::array<WcsTabState, 3> tabs{};
@@ -51,7 +52,8 @@ void PushState() {
                               0};
   }
   WcsWindowState state{sizeof(WcsWindowState), tabs.data(), tabs.size(),
-                       g_active, 1, 0, 0, L"Local profile"};
+                       g_active, 1, 0, 0, L"Local profile",
+                       g_restore_on_startup ? 1 : 0};
   if (g_update && g_shell) {
     g_update(g_shell, &state);
   }
@@ -82,6 +84,9 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
     g_active = 2;
     g_titles[g_active] = L"About Curve Browser";
     g_urls[g_active] = L"chrome://settings/help";
+    PushState();
+  } else if (args->command == WCS_COMMAND_SET_RESTORE_ON_STARTUP) {
+    g_restore_on_startup = args->event_flags != 0;
     PushState();
   }
 }

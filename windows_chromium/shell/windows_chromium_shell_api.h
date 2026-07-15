@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 1u
+#define WCS_API_VERSION 2u
 
 typedef void* WcsShellHandle;
 
@@ -50,6 +50,8 @@ typedef enum WcsCommand {
   WCS_COMMAND_TOGGLE_FULLSCREEN = 38,
   WCS_COMMAND_OPEN_ABOUT = 39,
   WCS_COMMAND_EXIT = 40,
+  WCS_COMMAND_SET_RESTORE_ON_STARTUP = 41,
+  WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -93,6 +95,7 @@ typedef struct WcsWindowState {
   int32_t can_go_forward;
   int32_t is_incognito;
   const wchar_t* profile_name;
+  int32_t restore_on_startup;
 } WcsWindowState;
 
 extern "C" {

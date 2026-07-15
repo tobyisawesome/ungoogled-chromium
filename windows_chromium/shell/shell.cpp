@@ -163,6 +163,11 @@ bool StartsWithInsensitive(std::wstring_view value, std::wstring_view prefix) {
   return true;
 }
 
+bool EqualsInsensitive(std::wstring_view value, std::wstring_view expected) {
+  return value.size() == expected.size() &&
+         StartsWithInsensitive(value, expected);
+}
+
 winrt::Windows::UI::Color Color(uint8_t red,
                                 uint8_t green,
                                 uint8_t blue,
@@ -601,6 +606,7 @@ void Shell::Invoke(WcsCommand command,
 
 HRESULT Shell::Update(const WcsWindowState& state) {
   try {
+    restore_on_startup_ = state.restore_on_startup != 0;
     UpdateTabs(state);
     back_button_.IsEnabled(state.can_go_back != 0);
     forward_button_.IsEnabled(state.can_go_forward != 0);
@@ -808,9 +814,15 @@ void Shell::UpdateTitleBarRegions() {
 }
 
 bool Shell::IsNativePage(std::wstring_view url) const {
+  if (EqualsInsensitive(url, L"chrome://settings") ||
+      EqualsInsensitive(url, L"chrome://settings/") ||
+      StartsWithInsensitive(url, L"chrome://settings/manageProfile") ||
+      StartsWithInsensitive(url, L"chrome://settings/help")) {
+    return true;
+  }
   constexpr std::wstring_view prefixes[] = {
-      L"chrome://settings",   L"chrome://downloads", L"chrome://history",
-      L"chrome://bookmarks",  L"chrome://extensions",
+      L"chrome://downloads", L"chrome://history", L"chrome://bookmarks",
+      L"chrome://extensions",
       L"chrome://password-manager"};
   return std::any_of(std::begin(prefixes), std::end(prefixes),
                      [url](std::wstring_view prefix) {
@@ -910,26 +922,36 @@ void Shell::UpdateNativePage(std::wstring_view url) {
         L"Update checks use the Curve Browser release channel and never require a Google account.",
         updates));
   } else if (StartsWithInsensitive(url, L"chrome://settings")) {
-    ToggleSwitch privacy;
-    privacy.IsOn(true);
+    TextBlock privacy;
+    privacy.Text(L"uBlock Origin bundled");
+    privacy.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
     page.Children().Append(MakeSettingsCard(
         L"Tracking protection",
-        L"Use Chromium's protection lists and uBlock Origin to reduce cross-site tracking.",
+        L"uBlock Origin is installed from its signed Chrome Web Store package for every new local profile.",
         privacy));
     ToggleSwitch startup;
-    startup.IsOn(false);
+    startup.IsOn(restore_on_startup_);
+    winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+        startup, L"Restore previous session");
+    startup.Toggled([this](const auto& sender, const auto&) {
+      const auto toggle = sender.template as<ToggleSwitch>();
+      Invoke(WCS_COMMAND_SET_RESTORE_ON_STARTUP, -1, -1, nullptr,
+             toggle.IsOn() ? 1u : 0u);
+    });
     page.Children().Append(MakeSettingsCard(
         L"Continue where you left off",
         L"Restore your local windows and tabs when Curve Browser starts.",
         startup));
-    ComboBox search;
-    search.MinWidth(180);
-    search.Items().Append(winrt::box_value(L"DuckDuckGo"));
-    search.Items().Append(winrt::box_value(L"Brave Search"));
-    search.Items().Append(winrt::box_value(L"Google"));
-    search.SelectedIndex(0);
+    Button search;
+    search.Content(winrt::box_value(L"Manage"));
+    winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+        search, L"Manage search engine");
+    search.Click([this](const auto&, const auto&) {
+      Invoke(WCS_COMMAND_OPEN_SEARCH_SETTINGS);
+    });
     page.Children().Append(MakeSettingsCard(
-        L"Search engine", L"Choose the service used for address-bar searches.",
+        L"Search engine",
+        L"Choose the service used for native address-bar searches.",
         search));
     Button passwords;
     passwords.Content(winrt::box_value(L"Open"));

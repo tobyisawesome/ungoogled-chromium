@@ -182,10 +182,10 @@ index ef13f8f68542dcb77ff97b64bc0f21ea171eb20c..ac832da34176599eb54bc776c46e37a8
    base::EnumSet<TabStripAndWebAppViewsReparentedState,
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb41c9ce02
+index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941b6b8da4f
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,423 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -206,6 +206,7 @@ index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/prefs/session_startup_pref.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_commands.h"
@@ -360,6 +361,8 @@ index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb
 +  if (profile_name.empty()) {
 +    profile_name = L"Local profile";
 +  }
++  const SessionStartupPref startup_pref =
++      SessionStartupPref::GetStartupPref(browser_->profile());
 +  const WcsWindowState state{
 +      sizeof(WcsWindowState),
 +      tabs.data(),
@@ -369,6 +372,7 @@ index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb
 +      active_contents && active_contents->GetController().CanGoForward(),
 +      browser_->profile()->IsOffTheRecord(),
 +      profile_name.c_str(),
++      startup_pref.ShouldRestoreLastSession(),
 +  };
 +  update_window_state_(shell_, &state);
 +}
@@ -457,7 +461,7 @@ index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb
 +    int64_t tab_id,
 +    int32_t tab_index,
 +    std::wstring text,
-+    [[maybe_unused]] uint32_t event_flags) {
++    uint32_t event_flags) {
 +  if (!browser_) {
 +    return;
 +  }
@@ -583,11 +587,31 @@ index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb
 +    case WCS_COMMAND_EXIT:
 +      ExecuteBrowserCommand(IDC_EXIT);
 +      break;
++    case WCS_COMMAND_SET_RESTORE_ON_STARTUP: {
++      Profile* profile = browser_->profile();
++      if (!SessionStartupPref::TypeIsManaged(profile->GetPrefs())) {
++        const SessionStartupPref current =
++            SessionStartupPref::GetStartupPref(profile);
++        const bool keep_urls = current.ShouldOpenUrls();
++        SessionStartupPref replacement(
++            event_flags ? (keep_urls ? SessionStartupPref::LAST_AND_URLS
++                                     : SessionStartupPref::LAST)
++                        : (keep_urls ? SessionStartupPref::URLS
++                                     : SessionStartupPref::DEFAULT));
++        replacement.urls = current.urls;
++        SessionStartupPref::SetStartupPref(profile, replacement);
++        SyncState();
++      }
++      break;
++    }
++    case WCS_COMMAND_OPEN_SEARCH_SETTINGS:
++      OpenInternalPage(GURL("chrome://settings/search"));
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..6b531ab53128779c7c4afc39bbac1d4acc7b6ffb
+index 0000000000000000000000000000000000000000..c57df9a6bd9ddf8adc2974948734f90044af108b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 @@ -0,0 +1,71 @@
@@ -644,7 +668,7 @@ index 0000000000000000000000000000000000000000..6b531ab53128779c7c4afc39bbac1d4a
 +                     int64_t tab_id,
 +                     int32_t tab_index,
 +                     std::wstring text,
-+                     [[maybe_unused]] uint32_t event_flags);
++                     uint32_t event_flags);
 +  int ResolveTabIndex(int64_t tab_id, int32_t tab_index) const;
 +  void ExecuteBrowserCommand(int command_id);
 +  void NavigateFromOmnibox(const std::wstring& text);
@@ -664,10 +688,10 @@ index 0000000000000000000000000000000000000000..6b531ab53128779c7c4afc39bbac1d4a
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
 diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..3a1f5fd296a187095ea871214f72251f30d6839e
+index 0000000000000000000000000000000000000000..b6c539d4b7ca06e03e781a4ffa59b93104f688c9
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,99 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -682,7 +706,7 @@ index 0000000000000000000000000000000000000000..3a1f5fd296a187095ea871214f72251f
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 1u
++#define WCS_API_VERSION 2u
 +
 +typedef void* WcsShellHandle;
 +
@@ -718,6 +742,8 @@ index 0000000000000000000000000000000000000000..3a1f5fd296a187095ea871214f72251f
 +  WCS_COMMAND_TOGGLE_FULLSCREEN = 38,
 +  WCS_COMMAND_OPEN_ABOUT = 39,
 +  WCS_COMMAND_EXIT = 40,
++  WCS_COMMAND_SET_RESTORE_ON_STARTUP = 41,
++  WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {
@@ -761,6 +787,7 @@ index 0000000000000000000000000000000000000000..3a1f5fd296a187095ea871214f72251f
 +  int32_t can_go_forward;
 +  int32_t is_incognito;
 +  const wchar_t* profile_name;
++  int32_t restore_on_startup;
 +} WcsWindowState;
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_

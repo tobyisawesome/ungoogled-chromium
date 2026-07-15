@@ -100,6 +100,7 @@ class Shell final {
   bool updating_ = false;
   bool native_page_visible_ = false;
   bool active_tab_loading_ = false;
+  bool restore_on_startup_ = false;
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
   std::wstring active_url_;

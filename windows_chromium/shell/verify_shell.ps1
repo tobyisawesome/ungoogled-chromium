@@ -148,6 +148,34 @@ try {
     throw 'The inactive loading tab left the toolbar in Stop state.'
   }
 
+  $settingsTab = Find-TabByName -Root $root -Name 'Settings'
+  $settingsSelection = $settingsTab.GetCurrentPattern(
+    [System.Windows.Automation.SelectionItemPattern]::Pattern)
+  $settingsSelection.Select()
+  Start-Sleep -Milliseconds 300
+  $startup = Find-DescendantByName -Root $root -Name 'Restore previous session'
+  if (-not $startup) {
+    throw 'The Chromium-backed startup setting is missing.'
+  }
+  $toggle = $startup.GetCurrentPattern(
+    [System.Windows.Automation.TogglePattern]::Pattern)
+  if ($toggle.Current.ToggleState -ne
+      [System.Windows.Automation.ToggleState]::On) {
+    throw 'The startup setting did not reflect the host state.'
+  }
+  $toggle.Toggle()
+  Start-Sleep -Milliseconds 300
+  $startup = Find-DescendantByName -Root $root -Name 'Restore previous session'
+  $toggle = $startup.GetCurrentPattern(
+    [System.Windows.Automation.TogglePattern]::Pattern)
+  if ($toggle.Current.ToggleState -ne
+      [System.Windows.Automation.ToggleState]::Off) {
+    throw 'The startup setting did not round-trip through the host command API.'
+  }
+  if (-not (Find-DescendantByName -Root $root -Name 'Manage search engine')) {
+    throw 'The Chromium search settings entry point is missing.'
+  }
+
   Write-Output "Curve Browser WinUI shell verification passed (PID $($process.Id))."
 } finally {
   if (-not $process.HasExited) {
