@@ -42,6 +42,16 @@ The preview is a real Win32 host loading the same shell DLL that Chromium uses.
 It supplies representative tab and navigation state so native interactions can
 be tested before a full Chromium relink.
 
+After building both projects, run the UI Automation and payload smoke test:
+
+```powershell
+shell\verify_shell.ps1
+```
+
+The test requires the native tabs, named icon buttons, TextBox omnibox, caption
+controls, and self-contained payload files. It also verifies that opening the
+profile and app flyouts does not accidentally dispatch a navigation command.
+
 For a deterministic visual-regression capture, pass a PNG output path. Add a
 page option to capture an expanded native surface:
 

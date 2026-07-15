@@ -63,7 +63,8 @@ class Shell final {
   void UpdateTitleBarRegions();
   ToolbarButton MakeGlyphButton(std::wstring_view glyph,
                                 std::wstring_view tooltip,
-                                WcsCommand command);
+                                WcsCommand command,
+                                bool invoke_on_click = true);
   winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem MakeMenuItem(
       std::wstring_view text,
       WcsCommand command,

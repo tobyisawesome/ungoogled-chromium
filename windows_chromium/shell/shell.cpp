@@ -18,6 +18,7 @@
 #include <utility>
 
 #include <dwmapi.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.System.h>
@@ -432,7 +433,8 @@ void Shell::BuildVisualTree() {
 
 Shell::ToolbarButton Shell::MakeGlyphButton(std::wstring_view glyph,
                                             std::wstring_view tooltip,
-                                            WcsCommand command) {
+                                            WcsCommand command,
+                                            bool invoke_on_click) {
   Button button;
   button.Content(ToolbarGlyph(glyph));
   // A native Button with an icon-only surface is the WinUI pattern that
@@ -449,7 +451,12 @@ Shell::ToolbarButton Shell::MakeGlyphButton(std::wstring_view glyph,
       Color(0, 0, 0, 0)});
   button.BorderThickness(Thickness{0});
   ToolTipService::SetToolTip(button, winrt::box_value(tooltip));
-  button.Click([this, command](const auto&, const auto&) { Invoke(command); });
+  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+      button, winrt::hstring{tooltip});
+  if (invoke_on_click) {
+    button.Click(
+        [this, command](const auto&, const auto&) { Invoke(command); });
+  }
   return button;
 }
 
@@ -510,10 +517,12 @@ void Shell::BuildToolbar() {
     address_box_.SelectAll();
   });
 
-  profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles", WCS_COMMAND_OPEN_PROFILES);
+  profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles",
+                                    WCS_COMMAND_OPEN_PROFILES, false);
   Grid::SetColumn(profile_button_, 4);
   toolbar_.Children().Append(profile_button_);
-  menu_button_ = MakeGlyphButton(L"\uE712", L"Settings and more", WCS_COMMAND_OPEN_SETTINGS);
+  menu_button_ = MakeGlyphButton(L"\uE712", L"Settings and more",
+                                 WCS_COMMAND_OPEN_SETTINGS, false);
   Grid::SetColumn(menu_button_, 5);
   toolbar_.Children().Append(menu_button_);
 }
@@ -597,6 +606,11 @@ HRESULT Shell::Update(const WcsWindowState& state) {
     ToolTipService::SetToolTip(
         profile_button_,
         winrt::box_value(state.profile_name ? state.profile_name : L"Profiles"));
+    const std::wstring profile_accessible_name =
+        L"Profiles — " +
+        std::wstring(state.profile_name ? state.profile_name : L"Default");
+    winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+        profile_button_, winrt::hstring{profile_accessible_name});
     return S_OK;
   } catch (...) {
     return winrt::to_hresult();
