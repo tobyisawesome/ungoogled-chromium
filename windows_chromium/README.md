@@ -65,8 +65,9 @@ shell\out\Release\x64\CurveBrowserShellPreview.exe C:\Temp\about.png --about
 Each shell build also writes
 `shell/out/<Configuration>/x64/curve_browser_payload_manifest.txt`. The
 manifest lists the self-contained DLL, PRI, XBF, and WinMD payload copied beside
-Chromium and consumed by the Curve Browser portable packager. Preview-host
-artifacts and development symbols are excluded.
+Chromium together with the WinUI assets, runtime helper, and localized MUI
+resources consumed by the Curve Browser portable packager. Preview-host
+artifacts, import libraries, and development symbols are excluded.
 
 ## Compatibility boundary
 

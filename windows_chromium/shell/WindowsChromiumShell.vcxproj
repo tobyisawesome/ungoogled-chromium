@@ -95,12 +95,14 @@
   </ItemGroup>
   <Target Name="WriteCurveBrowserPayloadManifest" AfterTargets="Build">
     <ItemGroup>
-      <CurveBrowserPayload Include="$(OutDir)*.dll;$(OutDir)*.pri;$(OutDir)*.xbf;$(OutDir)*.winmd" />
-      <CurveBrowserPayload Remove="$(OutDir)CurveBrowserShellPreview.*;$(OutDir)WindowsChromiumShellPreview.*;$(OutDir)windows_chromium_shell.*" />
+      <CurveBrowserTopLevelPayload Include="$(OutDir)*.dll;$(OutDir)*.pri;$(OutDir)*.xbf;$(OutDir)*.winmd;$(OutDir)App.xaml;$(OutDir)RestartAgent.exe" />
+      <CurveBrowserTopLevelPayload Remove="$(OutDir)CurveBrowserShellPreview.*;$(OutDir)WindowsChromiumShellPreview.*;$(OutDir)windows_chromium_shell.*" />
+      <CurveBrowserMuiPayload Include="$(OutDir)**\*.mui" />
+      <CurveBrowserAssetPayload Include="$(OutDir)Microsoft.UI.Xaml\Assets\*" />
     </ItemGroup>
     <WriteLinesToFile
         File="$(OutDir)curve_browser_payload_manifest.txt"
-        Lines="@(CurveBrowserPayload->'%(Filename)%(Extension)')"
+        Lines="@(CurveBrowserTopLevelPayload->'%(Filename)%(Extension)');@(CurveBrowserMuiPayload->'%(RecursiveDir)%(Filename)%(Extension)');@(CurveBrowserAssetPayload->'Microsoft.UI.Xaml\Assets\%(Filename)%(Extension)')"
         Overwrite="true"
         Encoding="UTF-8" />
   </Target>
