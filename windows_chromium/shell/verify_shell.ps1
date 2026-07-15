@@ -62,6 +62,22 @@ function Get-SelectedTabName {
   throw 'No selected TabView item was exposed to UI Automation.'
 }
 
+function Find-TabByName {
+  param(
+    [System.Windows.Automation.AutomationElement]$Root,
+    [string]$Name
+  )
+  $condition = [System.Windows.Automation.AndCondition]::new(@(
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::TabItem),
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+  ))
+  $Root.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
 $process = Start-Process -FilePath $preview -WorkingDirectory $output -PassThru
 try {
   $deadline = (Get-Date).AddSeconds(20)
@@ -112,6 +128,24 @@ try {
     if ((Get-SelectedTabName -Root $root) -ne $initialTab) {
       throw "$flyoutButtonName dispatched a navigation command while opening."
     }
+  }
+
+  $loadingTab = Find-TabByName -Root $root -Name 'WinUI 3 documentation'
+  $loadingSelection = $loadingTab.GetCurrentPattern(
+    [System.Windows.Automation.SelectionItemPattern]::Pattern)
+  $loadingSelection.Select()
+  Start-Sleep -Milliseconds 300
+  if (-not (Find-DescendantByName -Root $root -Name 'Stop loading (Esc)')) {
+    throw 'The active loading tab did not switch Reload to Stop.'
+  }
+
+  $firstTab = Find-TabByName -Root $root -Name 'Curve Browser'
+  $firstSelection = $firstTab.GetCurrentPattern(
+    [System.Windows.Automation.SelectionItemPattern]::Pattern)
+  $firstSelection.Select()
+  Start-Sleep -Milliseconds 300
+  if (-not (Find-DescendantByName -Root $root -Name 'Reload (Ctrl+R)')) {
+    throw 'The inactive loading tab left the toolbar in Stop state.'
   }
 
   Write-Output "Curve Browser WinUI shell verification passed (PID $($process.Id))."

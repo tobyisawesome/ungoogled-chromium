@@ -670,6 +670,8 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
     }
 
     const wchar_t* title = tab.title && *tab.title ? tab.title : L"New tab";
+    winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+        item, winrt::hstring{title});
     item.IsClosable(tab.pinned == 0);
     item.IconSource(nullptr);
     if (tab.loading) {
