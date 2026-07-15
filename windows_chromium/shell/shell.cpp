@@ -82,6 +82,47 @@ struct ThreadRuntime {
 };
 
 thread_local std::unique_ptr<ThreadRuntime> g_thread_runtime;
+using ContentPreTranslateMessage = BOOL(WINAPI*)(MSG*);
+thread_local HHOOK g_message_hook = nullptr;
+thread_local ContentPreTranslateMessage g_pre_translate_message = nullptr;
+
+LRESULT CALLBACK XamlMessageHook(int code, WPARAM wparam, LPARAM lparam) {
+  if (code >= 0 && wparam == PM_REMOVE && g_pre_translate_message) {
+    auto* message = reinterpret_cast<MSG*>(lparam);
+    if (message && message->message != WM_NULL &&
+        g_pre_translate_message(message)) {
+      // WH_GETMESSAGE cannot prevent dispatch by its return value. Replacing a
+      // handled message with WM_NULL is the documented hook pattern and keeps
+      // Chromium from dispatching it a second time after WinUI consumes it.
+      message->message = WM_NULL;
+      message->hwnd = nullptr;
+      message->wParam = 0;
+      message->lParam = 0;
+    }
+  }
+  return CallNextHookEx(g_message_hook, code, wparam, lparam);
+}
+
+void EnsureXamlMessageTranslation() {
+  if (g_message_hook) {
+    return;
+  }
+  HMODULE windowing = GetModuleHandleW(L"Microsoft.UI.Windowing.Core.dll");
+  if (!windowing) {
+    return;
+  }
+  g_pre_translate_message = reinterpret_cast<ContentPreTranslateMessage>(
+      GetProcAddress(windowing, "ContentPreTranslateMessage"));
+  if (!g_pre_translate_message) {
+    return;
+  }
+  g_message_hook = SetWindowsHookExW(WH_GETMESSAGE, &XamlMessageHook, nullptr,
+                                     GetCurrentThreadId());
+  if (!g_message_hook) {
+    g_pre_translate_message = nullptr;
+    winrt::throw_last_error();
+  }
+}
 
 void EnsureSelfContainedRuntimeLoaded() {
   static HMODULE runtime = [] {
@@ -239,6 +280,7 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   xaml_source_.Content(root_);
   island_window_ = winrt::Microsoft::UI::GetWindowFromWindowId(
       xaml_source_.SiteBridge().WindowId());
+  EnsureXamlMessageTranslation();
 
   LONG_PTR style = GetWindowLongPtrW(island_window_, GWL_STYLE);
   SetWindowLongPtrW(island_window_, GWL_STYLE,

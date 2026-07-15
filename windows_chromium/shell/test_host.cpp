@@ -18,7 +18,6 @@ using CreateShell = HRESULT(__stdcall*)(HWND, const WcsHostCallbacks*,
 using DestroyShell = void(__stdcall*)(WcsShellHandle);
 using UpdateWindowState = HRESULT(__stdcall*)(WcsShellHandle,
                                               const WcsWindowState*);
-using PreTranslateMessage = BOOL(WINAPI*)(MSG*);
 using CaptureShell = HRESULT(__stdcall*)(WcsShellHandle, const wchar_t*);
 
 HMODULE g_shell_module = nullptr;
@@ -219,18 +218,10 @@ int wmain(int argc, wchar_t** argv) {
                   static_cast<unsigned long long>(timer));
   }
 
-  HMODULE windowing = GetModuleHandleW(L"Microsoft.UI.Windowing.Core.dll");
-  const auto pre_translate = windowing
-      ? reinterpret_cast<PreTranslateMessage>(
-            GetProcAddress(windowing, "ContentPreTranslateMessage"))
-      : nullptr;
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
     if (message.hwnd == window && message.message == WM_TIMER) {
       DispatchMessageW(&message);
-      continue;
-    }
-    if (pre_translate && pre_translate(&message)) {
       continue;
     }
     TranslateMessage(&message);
