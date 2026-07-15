@@ -492,8 +492,11 @@ void Shell::BuildToolbar() {
                                     WCS_COMMAND_FORWARD);
   Grid::SetColumn(forward_button_, 1);
   toolbar_.Children().Append(forward_button_);
-  reload_button_ =
-      MakeGlyphButton(L"\uE72C", L"Reload (Ctrl+R)", WCS_COMMAND_RELOAD);
+  reload_button_ = MakeGlyphButton(L"\uE72C", L"Reload (Ctrl+R)",
+                                   WCS_COMMAND_RELOAD, false);
+  reload_button_.Click([this](const auto&, const auto&) {
+    Invoke(active_tab_loading_ ? WCS_COMMAND_STOP : WCS_COMMAND_RELOAD);
+  });
   Grid::SetColumn(reload_button_, 2);
   toolbar_.Children().Append(reload_button_);
 
@@ -626,6 +629,7 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
   } reset_updating(updating_);
 
   std::set<int64_t> live_tabs;
+  active_tab_loading_ = false;
   for (size_t index = 0; index < state.tab_count; ++index) {
     const WcsTabState& tab = state.tabs[index];
     live_tabs.insert(tab.tab_id);
@@ -644,9 +648,11 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
           MakeMenuItem(L"Reload", WCS_COMMAND_RELOAD, tab.tab_id));
       context_menu.Items().Append(MakeMenuItem(
           L"Duplicate tab", WCS_COMMAND_DUPLICATE_TAB, tab.tab_id));
-      context_menu.Items().Append(MakeMenuItem(
+      auto pin_item = MakeMenuItem(
           tab.pinned ? L"Unpin tab" : L"Pin tab", WCS_COMMAND_TOGGLE_PIN_TAB,
-          tab.tab_id));
+          tab.tab_id);
+      context_menu.Items().Append(pin_item);
+      tab_pin_menu_items_.emplace(tab.tab_id, pin_item);
       context_menu.Items().Append(MenuFlyoutSeparator{});
       context_menu.Items().Append(MakeMenuItem(
           L"Close tab", WCS_COMMAND_CLOSE_TAB, tab.tab_id));
@@ -664,25 +670,42 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
     }
 
     const wchar_t* title = tab.title && *tab.title ? tab.title : L"New tab";
-    item.Header(winrt::box_value(title));
     item.IsClosable(tab.pinned == 0);
     item.IconSource(nullptr);
     if (tab.loading) {
-      SymbolIconSource source;
-      source.Symbol(Symbol::Sync);
-      item.IconSource(source);
+      StackPanel loading_header;
+      loading_header.Orientation(Orientation::Horizontal);
+      ProgressRing progress;
+      progress.Width(14);
+      progress.Height(14);
+      progress.Margin(Thickness{0, 0, 6, 0});
+      progress.IsActive(true);
+      TextBlock label;
+      label.Text(title);
+      loading_header.Children().Append(progress);
+      loading_header.Children().Append(label);
+      item.Header(loading_header);
     } else if (tab.audible) {
+      item.Header(winrt::box_value(title));
       FontIconSource source;
       source.Glyph(tab.muted ? L"\uE74F" : L"\uE767");
       source.FontFamily(winrt::Microsoft::UI::Xaml::Media::FontFamily{
           L"Segoe Fluent Icons"});
       item.IconSource(source);
+    } else {
+      item.Header(winrt::box_value(title));
+    }
+
+    if (const auto pin = tab_pin_menu_items_.find(tab.tab_id);
+        pin != tab_pin_menu_items_.end()) {
+      pin->second.Text(tab.pinned ? L"Unpin tab" : L"Pin tab");
     }
 
     if (static_cast<int32_t>(index) == state.active_index) {
       tab_view_.SelectedItem(item);
       active_index_ = state.active_index;
       active_tab_id_ = tab.tab_id;
+      active_tab_loading_ = tab.loading != 0;
       active_url_ = tab.url ? tab.url : L"";
       address_box_.Text(active_url_);
     }
@@ -697,8 +720,18 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
     if (tab_view_.TabItems().IndexOf(it->second, item_index)) {
       tab_view_.TabItems().RemoveAt(item_index);
     }
+    tab_pin_menu_items_.erase(it->first);
     it = tab_items_.erase(it);
   }
+
+  const wchar_t* reload_tooltip =
+      active_tab_loading_ ? L"Stop loading (Esc)" : L"Reload (Ctrl+R)";
+  reload_button_.Content(
+      ToolbarGlyph(active_tab_loading_ ? L"\uE71A" : L"\uE72C"));
+  ToolTipService::SetToolTip(reload_button_,
+                             winrt::box_value(reload_tooltip));
+  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+      reload_button_, winrt::hstring{reload_tooltip});
 
   UpdateNativePage(active_url_);
   UpdateTitleBarRegions();

@@ -99,6 +99,7 @@ class Shell final {
   bool visible_ = true;
   bool updating_ = false;
   bool native_page_visible_ = false;
+  bool active_tab_loading_ = false;
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
   std::wstring active_url_;
@@ -124,6 +125,8 @@ class Shell final {
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;
+  std::map<int64_t, winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem>
+      tab_pin_menu_items_;
 };
 
 }  // namespace windows_chromium

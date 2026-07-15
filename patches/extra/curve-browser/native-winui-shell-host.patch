@@ -182,10 +182,10 @@ index ef13f8f68542dcb77ff97b64bc0f21ea171eb20c..ac832da34176599eb54bc776c46e37a8
    base::EnumSet<TabStripAndWebAppViewsReparentedState,
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..b198d4d8710abeb698458dcb9c8d943d03db234a
+index 0000000000000000000000000000000000000000..bddaf9026a5abf8ee8b0ee099b351dfb41c9ce02
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,399 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -219,6 +219,7 @@ index 0000000000000000000000000000000000000000..b198d4d8710abeb698458dcb9c8d943d
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/open_url_params.h"
++#include "content/public/browser/reload_type.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/common/referrer.h"
 +#include "ui/base/page_transition_types.h"
@@ -510,7 +511,12 @@ index 0000000000000000000000000000000000000000..b198d4d8710abeb698458dcb9c8d943d
 +      ExecuteBrowserCommand(IDC_FORWARD);
 +      break;
 +    case WCS_COMMAND_RELOAD:
-+      ExecuteBrowserCommand(IDC_RELOAD);
++      if (tab_id >= 0 && tab_index != TabStripModel::kNoTab) {
++        model->GetWebContentsAt(tab_index)->GetController().Reload(
++            content::ReloadType::NORMAL, true);
++      } else {
++        ExecuteBrowserCommand(IDC_RELOAD);
++      }
 +      break;
 +    case WCS_COMMAND_STOP:
 +      ExecuteBrowserCommand(IDC_STOP);
