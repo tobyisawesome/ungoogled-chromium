@@ -1,0 +1,26 @@
+description: bundle the official uBlock Origin CRX for new Curve Browser profiles
+author: Curve Browser Authors
+
+---
+ chrome/browser/extensions/default_extensions/BUILD.gn                 | 2 +-
+ chrome/browser/extensions/default_extensions/external_extensions.json | 4 ++++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+--- a/chrome/browser/extensions/default_extensions/BUILD.gn
++++ b/chrome/browser/extensions/default_extensions/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ if (is_win) {
+   copy("default_extensions") {
+-    sources = [ "external_extensions.json" ]
++    sources = [ "external_extensions.json", "ublock_origin.crx" ]
+     outputs = [ "$root_out_dir/extensions/{{source_file_part}}" ]
+   }
+ } else {
+--- a/chrome/browser/extensions/default_extensions/external_extensions.json
++++ b/chrome/browser/extensions/default_extensions/external_extensions.json
+@@ -4,0 +5,4 @@
++  "cjpalhdlnbpafiamejdnhcphjbkeiagm": {
++    "external_crx": "ublock_origin.crx",
++    "external_version": "1.72.2"
++  }
