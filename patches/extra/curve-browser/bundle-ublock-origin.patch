@@ -19,8 +19,12 @@ author: Curve Browser Authors
  } else {
 --- a/chrome/browser/extensions/default_extensions/external_extensions.json
 +++ b/chrome/browser/extensions/default_extensions/external_extensions.json
-@@ -4,0 +5,4 @@
+@@ -4,2 +4,6 @@
+ {
+-}
+\ No newline at end of file
 +  "cjpalhdlnbpafiamejdnhcphjbkeiagm": {
 +    "external_crx": "ublock_origin.crx",
 +    "external_version": "1.72.2"
 +  }
++}
