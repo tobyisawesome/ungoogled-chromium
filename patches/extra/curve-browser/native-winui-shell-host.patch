@@ -658,7 +658,7 @@ index 0000000000000000000000000000000000000000..6b531ab53128779c7c4afc39bbac1d4a
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
 diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..1bb5b7e28d9ebb23f8945284e31a260f70d43ff3
+index 0000000000000000000000000000000000000000..3a1f5fd296a187095ea871214f72251f30d6839e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 @@ -0,0 +1,96 @@
@@ -673,7 +673,7 @@ index 0000000000000000000000000000000000000000..1bb5b7e28d9ebb23f8945284e31a260f
 +#include <stdint.h>
 +#include <windows.h>
 +
-+// Stable C ABI shared with windows_chromium_shell.dll. Chromium resolves each
++// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
 +#define WCS_API_VERSION 1u

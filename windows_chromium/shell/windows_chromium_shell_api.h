@@ -1,4 +1,4 @@
-// Copyright 2026 The Windows Chromium Authors
+// Copyright 2026 The Curve Browser Authors
 // SPDX-License-Identifier: BSD-3-Clause
 
 #ifndef WINDOWS_CHROMIUM_SHELL_WINDOWS_CHROMIUM_SHELL_API_H_
