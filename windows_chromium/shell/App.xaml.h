@@ -7,7 +7,7 @@
 
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 
-namespace winrt::WindowsChromiumShell::implementation {
+namespace winrt::CurveBrowserShell::implementation {
 
 struct App : AppT<App> {
   App()
@@ -23,4 +23,4 @@ struct App : AppT<App> {
       nullptr};
 };
 
-}  // namespace winrt::WindowsChromiumShell::implementation
+}  // namespace winrt::CurveBrowserShell::implementation

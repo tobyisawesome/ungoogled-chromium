@@ -150,7 +150,7 @@ int wmain(int argc, wchar_t** argv) {
   window_class.lpfnWndProc = WindowProc;
   window_class.hInstance = instance;
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-  window_class.lpszClassName = L"WindowsChromiumShellPreview";
+  window_class.lpszClassName = L"CurveBrowserShellPreview";
   // Leave the shell region unpainted so its transparent XAML base reveals
   // the parent's DWM Mica Alt backdrop. Chromium uses the same contract when
   // the native shell replaces the Views toolbar; the page area remains
@@ -168,7 +168,7 @@ int wmain(int argc, wchar_t** argv) {
     return static_cast<int>(GetLastError());
   }
 
-  g_shell_module = LoadLibraryW(L"windows_chromium_shell.dll");
+  g_shell_module = LoadLibraryW(L"curve_browser_shell.dll");
   if (!g_shell_module) {
     std::fwprintf(stderr, L"LoadLibrary failed: %lu\n", GetLastError());
     return static_cast<int>(GetLastError());

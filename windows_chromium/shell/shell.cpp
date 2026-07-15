@@ -67,7 +67,7 @@ struct ThreadRuntime {
     }
     try {
       application = winrt::make<
-          winrt::WindowsChromiumShell::implementation::App>();
+          winrt::CurveBrowserShell::implementation::App>();
     } catch (const winrt::hresult_error& error) {
       std::fwprintf(stderr,
                     L"WinUI Application initialization failed: 0x%08X\n",

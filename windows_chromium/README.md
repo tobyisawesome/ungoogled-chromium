@@ -12,7 +12,8 @@ browser's custom control shapes.
 
 ## Architecture
 
-- `shell/WindowsChromiumShell.vcxproj` builds a self-contained WinUI 3 DLL.
+- `shell/WindowsChromiumShell.vcxproj` builds the self-contained
+  `curve_browser_shell.dll` WinUI 3 runtime.
 - Chromium loads the DLL through the versioned C ABI in
   `shell/windows_chromium_shell_api.h`; Chromium never includes WinUI headers.
 - The island owns the native `TabView`, toolbar, menus, profile entry point, and
@@ -34,7 +35,7 @@ From a Visual Studio Developer PowerShell:
 ```powershell
 msbuild shell\WindowsChromiumShell.vcxproj /restore /p:Configuration=Release /p:Platform=x64
 msbuild shell\WindowsChromiumShellPreview.vcxproj /restore /p:Configuration=Release /p:Platform=x64
-shell\out\Release\x64\WindowsChromiumShellPreview.exe
+shell\out\Release\x64\CurveBrowserShellPreview.exe
 ```
 
 The preview is a real Win32 host loading the same shell DLL that Chromium uses.
@@ -45,14 +46,14 @@ For a deterministic visual-regression capture, pass a PNG output path. Add a
 page option to capture an expanded native surface:
 
 ```powershell
-shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\shell.png
-shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\settings.png --settings
-shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\profiles.png --profiles
-shell\out\Release\x64\WindowsChromiumShellPreview.exe C:\Temp\about.png --about
+shell\out\Release\x64\CurveBrowserShellPreview.exe C:\Temp\shell.png
+shell\out\Release\x64\CurveBrowserShellPreview.exe C:\Temp\settings.png --settings
+shell\out\Release\x64\CurveBrowserShellPreview.exe C:\Temp\profiles.png --profiles
+shell\out\Release\x64\CurveBrowserShellPreview.exe C:\Temp\about.png --about
 ```
 
 Each shell build also writes
-`shell/out/<Configuration>/x64/windows_chromium_payload_manifest.txt`. The
+`shell/out/<Configuration>/x64/curve_browser_payload_manifest.txt`. The
 manifest lists the self-contained DLL, PRI, XBF, and WinMD payload copied beside
 Chromium and consumed by the Curve Browser portable packager. Preview-host
 artifacts and development symbols are excluded.

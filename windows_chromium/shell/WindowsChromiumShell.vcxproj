@@ -14,7 +14,7 @@
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{A1F5550B-5D96-46CF-BBC5-3EAC4412E293}</ProjectGuid>
-    <RootNamespace>WindowsChromiumShell</RootNamespace>
+    <RootNamespace>CurveBrowserShell</RootNamespace>
     <ApplicationType>Windows Store</ApplicationType>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.22000.0</WindowsTargetPlatformMinVersion>
@@ -43,7 +43,7 @@
   <PropertyGroup>
     <OutDir>$(SolutionDir)out\$(Configuration)\$(Platform)\</OutDir>
     <IntDir>$(SolutionDir)out\obj\$(Configuration)\$(Platform)\</IntDir>
-    <TargetName>windows_chromium_shell</TargetName>
+    <TargetName>curve_browser_shell</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -96,10 +96,10 @@
   <Target Name="WriteCurveBrowserPayloadManifest" AfterTargets="Build">
     <ItemGroup>
       <CurveBrowserPayload Include="$(OutDir)*.dll;$(OutDir)*.pri;$(OutDir)*.xbf;$(OutDir)*.winmd" />
-      <CurveBrowserPayload Remove="$(OutDir)WindowsChromiumShellPreview.*" />
+      <CurveBrowserPayload Remove="$(OutDir)CurveBrowserShellPreview.*;$(OutDir)WindowsChromiumShellPreview.*;$(OutDir)windows_chromium_shell.*" />
     </ItemGroup>
     <WriteLinesToFile
-        File="$(OutDir)windows_chromium_payload_manifest.txt"
+        File="$(OutDir)curve_browser_payload_manifest.txt"
         Lines="@(CurveBrowserPayload->'%(Filename)%(Extension)')"
         Overwrite="true"
         Encoding="UTF-8" />

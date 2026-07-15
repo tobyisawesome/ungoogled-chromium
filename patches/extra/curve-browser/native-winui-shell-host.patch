@@ -224,7 +224,7 @@ index 0000000000..1579038545
 +
 +namespace {
 +
-+constexpr wchar_t kShellDllName[] = L"windows_chromium_shell.dll";
++constexpr wchar_t kShellDllName[] = L"curve_browser_shell.dll";
 +constexpr char kDisableShellSwitch[] = "disable-curve-browser-shell";
 +constexpr char kShellPathSwitch[] = "curve-browser-shell-path";
 +
@@ -646,7 +646,7 @@ index 0000000000..1bb5b7e28d
 +#include <stdint.h>
 +#include <windows.h>
 +
-+// Stable C ABI shared with windows_chromium_shell.dll. Chromium resolves each
++// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
 +#define WCS_API_VERSION 1u
