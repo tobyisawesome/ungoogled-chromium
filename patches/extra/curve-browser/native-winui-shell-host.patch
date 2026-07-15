@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index b669d4f3ee..a2ec6063d5 100644
+index b669d4f3ee5f390b5b30ea4343b0cf082b72ac02..a2ec6063d5d22563d057b05af2fd824c518aa521 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
 @@ -4996,6 +4996,9 @@ static_library("ui") {
@@ -13,7 +13,7 @@ index b669d4f3ee..a2ec6063d5 100644
      }
  
 diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
-index c5b196b2be..6f04bbe2c7 100644
+index c5b196b2be31797fdcd3b41e8816db84b83705fa..6f04bbe2c7e776425dc8a57901c433bb48021592 100644
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
 @@ -153,6 +153,9 @@
@@ -154,7 +154,7 @@ index c5b196b2be..6f04bbe2c7 100644
  }
  
 diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
-index ef13f8f685..ac832da341 100644
+index ef13f8f68542dcb77ff97b64bc0f21ea171eb20c..ac832da34176599eb54bc776c46e37a8027515a3 100644
 --- a/chrome/browser/ui/views/frame/browser_view.h
 +++ b/chrome/browser/ui/views/frame/browser_view.h
 @@ -77,6 +77,9 @@ class Browser;
@@ -182,10 +182,10 @@ index ef13f8f685..ac832da341 100644
    base::EnumSet<TabStripAndWebAppViewsReparentedState,
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
 new file mode 100644
-index 0000000000..1579038545
+index 0000000000000000000000000000000000000000..b198d4d8710abeb698458dcb9c8d943d03db234a
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,393 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -209,9 +209,13 @@ index 0000000000..1579038545
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/omnibox/omnibox_controller.h"
++#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
++#include "chrome/browser/ui/omnibox/omnibox_view.h"
 +#include "chrome/browser/ui/tabs/tab_enums.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/open_url_params.h"
@@ -423,6 +427,30 @@ index 0000000000..1579038545
 +                                        WindowOpenDisposition::CURRENT_TAB);
 +}
 +
++void CurveBrowserNativeShellHostWin::NavigateFromOmnibox(
++    const std::wstring& text) {
++  LocationBarView* location_bar = browser_view_->GetLocationBarView();
++  OmniboxView* omnibox = location_bar ? location_bar->GetOmniboxView() : nullptr;
++  if (!omnibox) {
++    return;
++  }
++
++  // Reuse Chromium's real omnibox model even though the Views toolbar is
++  // hidden. This preserves URL fixup, the configured search provider,
++  // keyword-mode behavior, security checks, and navigation metrics for input
++  // submitted by the native WinUI TextBox.
++  omnibox->SetUserText(base::WideToUTF16(text));
++  omnibox->controller()->edit_model()->AcceptInput(
++      WindowOpenDisposition::CURRENT_TAB);
++}
++
++void CurveBrowserNativeShellHostWin::OpenInternalPage(const GURL& url) {
++  content::OpenURLParams params(url, content::Referrer(),
++                                WindowOpenDisposition::CURRENT_TAB,
++                                ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
++  browser_->OpenURL(params, {});
++}
++
 +void CurveBrowserNativeShellHostWin::InvokeCommand(
 +    WcsCommand command,
 +    int64_t tab_id,
@@ -489,11 +517,7 @@ index 0000000000..1579038545
 +      break;
 +    case WCS_COMMAND_NAVIGATE:
 +      if (!text.empty()) {
-+        content::OpenURLParams params(GURL(base::WideToUTF8(text)),
-+                                      content::Referrer(),
-+                                      WindowOpenDisposition::CURRENT_TAB,
-+                                      ui::PAGE_TRANSITION_TYPED, false);
-+        browser_->OpenURL(params, {});
++        NavigateFromOmnibox(text);
 +      }
 +      break;
 +    case WCS_COMMAND_HOME:
@@ -518,7 +542,7 @@ index 0000000000..1579038545
 +      ExecuteBrowserCommand(IDC_OPTIONS);
 +      break;
 +    case WCS_COMMAND_OPEN_PROFILES:
-+      ExecuteBrowserCommand(IDC_SHOW_AVATAR_MENU);
++      OpenInternalPage(GURL("chrome://settings/manageProfile"));
 +      break;
 +    case WCS_COMMAND_NEW_WINDOW:
 +      ExecuteBrowserCommand(IDC_NEW_WINDOW);
@@ -557,10 +581,10 @@ index 0000000000..1579038545
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 new file mode 100644
-index 0000000000..a26bf048db
+index 0000000000000000000000000000000000000000..6b531ab53128779c7c4afc39bbac1d4acc7b6ffb
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,71 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -578,6 +602,7 @@ index 0000000000..a26bf048db
 +
 +class Browser;
 +class BrowserView;
++class GURL;
 +
 +// Owns the optional in-process WinUI 3 shell for one normal browser window.
 +// The DLL boundary intentionally contains no WinRT or WinUI types so Chromium
@@ -616,6 +641,8 @@ index 0000000000..a26bf048db
 +                     [[maybe_unused]] uint32_t event_flags);
 +  int ResolveTabIndex(int64_t tab_id, int32_t tab_index) const;
 +  void ExecuteBrowserCommand(int command_id);
++  void NavigateFromOmnibox(const std::wstring& text);
++  void OpenInternalPage(const GURL& url);
 +  void Unload();
 +
 +  raw_ptr<BrowserView> browser_view_;
@@ -631,7 +658,7 @@ index 0000000000..a26bf048db
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
 diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 new file mode 100644
-index 0000000000..1bb5b7e28d
+index 0000000000000000000000000000000000000000..1bb5b7e28d9ebb23f8945284e31a260f70d43ff3
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 @@ -0,0 +1,96 @@
@@ -646,7 +673,7 @@ index 0000000000..1bb5b7e28d
 +#include <stdint.h>
 +#include <windows.h>
 +
-+// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
++// Stable C ABI shared with windows_chromium_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
 +#define WCS_API_VERSION 1u
