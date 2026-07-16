@@ -45,6 +45,7 @@ void PushState() {
                               index,
                               g_titles[index].c_str(),
                               g_urls[index].c_str(),
+                              L"",
                               index == g_active,
                               index == 0,
                               index == 1,

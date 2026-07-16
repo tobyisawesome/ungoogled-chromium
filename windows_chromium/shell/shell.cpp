@@ -275,6 +275,28 @@ winrt::Microsoft::UI::Xaml::Media::Geometry TabShoulderGeometry(bool left) {
   return geometry.as<Geometry>();
 }
 
+winrt::Microsoft::UI::Xaml::DependencyObject FindVisualChildByName(
+    const winrt::Microsoft::UI::Xaml::DependencyObject& root,
+    std::wstring_view name) {
+  using winrt::Microsoft::UI::Xaml::FrameworkElement;
+  using winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper;
+  if (!root) {
+    return nullptr;
+  }
+  const int count = VisualTreeHelper::GetChildrenCount(root);
+  for (int index = 0; index < count; ++index) {
+    const auto child = VisualTreeHelper::GetChild(root, index);
+    if (const auto element = child.try_as<FrameworkElement>();
+        element && element.Name() == name) {
+      return child;
+    }
+    if (const auto match = FindVisualChildByName(child, name)) {
+      return match;
+    }
+  }
+  return nullptr;
+}
+
 Border MakeSettingsCard(std::wstring_view title,
                         std::wstring_view description,
                         const winrt::Microsoft::UI::Xaml::FrameworkElement& trailing) {
@@ -347,9 +369,14 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   const DWM_SYSTEMBACKDROP_TYPE backdrop_type = DWMSBT_TABBEDWINDOW;
   DwmSetWindowAttribute(parent_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
                         sizeof(backdrop_type));
+  SetPropW(parent_, L"CurveBrowserNativeShellActive",
+           reinterpret_cast<HANDLE>(1));
 }
 
 Shell::~Shell() {
+  if (parent_ && IsWindow(parent_)) {
+    RemovePropW(parent_, L"CurveBrowserNativeShellActive");
+  }
   DetachWindowSubclass();
   if (non_client_pointer_source_) {
     non_client_pointer_source_.ClearAllRegionRects();
@@ -392,8 +419,13 @@ void Shell::BuildVisualTree() {
 
   tab_view_ = TabView{};
   tab_view_.IsAddTabButtonVisible(true);
-  tab_view_.CanDragTabs(true);
-  tab_view_.CanReorderTabs(true);
+  // WinUI TabView does not have a browser-window tear-out contract. Enabling
+  // its generic drag source let a pointer leave the island while Chromium was
+  // synchronizing the same item, which could tear down a live TabViewItem and
+  // crash the process. Keep tab drag disabled until native window tear-out is
+  // implemented deliberately.
+  tab_view_.CanDragTabs(false);
+  tab_view_.CanReorderTabs(false);
   tab_view_.TabWidthMode(TabViewWidthMode::SizeToContent);
   // The custom title bar uses the 48 px tall system-caption metric so the
   // caption buttons span the complete row. Keep TabView's familiar 40 px
@@ -401,8 +433,10 @@ void Shell::BuildVisualTree() {
   // its selected item and shoulders sink directly into the command layer.
   tab_view_.Height(40);
   tab_view_.Padding(Thickness{0});
+  tab_view_.Margin(Thickness{8, 0, 0, 0});
   tab_view_.VerticalAlignment(VerticalAlignment::Bottom);
   Grid::SetRow(tab_view_, 0);
+  Canvas::SetZIndex(tab_view_, 2);
   root_.Children().Append(tab_view_);
   tab_view_.SizeChanged(
       [this](const auto&, const auto&) {
@@ -415,6 +449,8 @@ void Shell::BuildVisualTree() {
   tab_shoulder_layer_.HorizontalAlignment(HorizontalAlignment::Stretch);
   tab_shoulder_layer_.VerticalAlignment(VerticalAlignment::Stretch);
   Grid::SetRow(tab_shoulder_layer_, 0);
+  Grid::SetRowSpan(tab_shoulder_layer_, 2);
+  Canvas::SetZIndex(tab_shoulder_layer_, 1);
 
   left_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
   left_tab_shoulder_.Width(8);
@@ -518,6 +554,15 @@ void Shell::BuildToolbar() {
   // commanding row. Keeping that arithmetic exact prevents XAML from
   // compressing or clipping the icon controls.
   toolbar_.Padding(Thickness{8, 4, 8, 4});
+  // The stock Button disabled visual has a filled plate. Explorer-style
+  // navigation glyphs remain backgroundless when unavailable.
+  const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
+  toolbar_.Resources().Insert(
+      winrt::box_value(winrt::hstring{L"ButtonBackgroundDisabled"}),
+      transparent);
+  toolbar_.Resources().Insert(
+      winrt::box_value(winrt::hstring{L"ButtonBorderBrushDisabled"}),
+      transparent);
   Grid::SetRow(toolbar_, 1);
   root_.Children().Append(toolbar_);
 
@@ -552,25 +597,56 @@ void Shell::BuildToolbar() {
   Grid::SetColumn(reload_button_, 2);
   toolbar_.Children().Append(reload_button_);
 
-  address_box_ = TextBox{};
+  Grid address_host;
+  Grid::SetColumn(address_host, 3);
+  toolbar_.Children().Append(address_host);
+
+  address_box_ = AutoSuggestBox{};
   address_box_.PlaceholderText(L"Search or enter an address");
   address_box_.Height(32);
   address_box_.Margin(Thickness{4, 0, 8, 0});
-  Grid::SetColumn(address_box_, 3);
-  toolbar_.Children().Append(address_box_);
-  address_box_.KeyDown(
-      [this](const auto&,
-             const winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs& args) {
-        if (args.Key() == winrt::Windows::System::VirtualKey::Enter) {
-          const std::wstring value = address_box_.Text().c_str();
+  address_box_.Padding(Thickness{32, 0, 32, 0});
+  address_host.Children().Append(address_box_);
+  address_box_.QuerySubmitted(
+      [this](const AutoSuggestBox&,
+             const AutoSuggestBoxQuerySubmittedEventArgs& args) {
+        std::wstring value = args.QueryText().c_str();
+        if (const auto chosen = args.ChosenSuggestion()) {
+          if (const auto property =
+                  chosen.try_as<winrt::Windows::Foundation::IPropertyValue>();
+              property &&
+              property.Type() ==
+                  winrt::Windows::Foundation::PropertyType::String) {
+            value = property.GetString().c_str();
+          }
+        }
+        if (!value.empty()) {
           Invoke(WCS_COMMAND_NAVIGATE, active_tab_id_, active_index_,
                  value.c_str());
-          args.Handled(true);
         }
       });
-  address_box_.GotFocus([this](const auto&, const auto&) {
-    address_box_.SelectAll();
-  });
+  address_box_.TextChanged(
+      [this](const AutoSuggestBox& sender,
+             const AutoSuggestBoxTextChangedEventArgs&) {
+        if (!updating_) {
+          UpdateAddressSuggestions(sender.Text().c_str());
+        }
+      });
+  security_button_ = MakeGlyphButton(L"\uE72E", L"View site information",
+                                     WCS_COMMAND_SHOW_SITE_INFO);
+  security_button_.Width(28);
+  security_button_.Height(28);
+  security_button_.HorizontalAlignment(HorizontalAlignment::Left);
+  security_button_.Margin(Thickness{6, 0, 0, 0});
+  address_host.Children().Append(security_button_);
+
+  favorite_button_ = MakeGlyphButton(L"\uE734", L"Add this page to favorites",
+                                     WCS_COMMAND_BOOKMARK_PAGE);
+  favorite_button_.Width(28);
+  favorite_button_.Height(28);
+  favorite_button_.HorizontalAlignment(HorizontalAlignment::Right);
+  favorite_button_.Margin(Thickness{0, 0, 10, 0});
+  address_host.Children().Append(favorite_button_);
 
   profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles",
                                     WCS_COMMAND_OPEN_PROFILES, false);
@@ -682,9 +758,13 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
   } reset_updating(updating_);
 
   std::set<int64_t> live_tabs;
+  tab_suggestions_.clear();
   active_tab_loading_ = false;
   for (size_t index = 0; index < state.tab_count; ++index) {
     const WcsTabState& tab = state.tabs[index];
+    if (tab.url && *tab.url) {
+      tab_suggestions_.emplace_back(tab.url);
+    }
     live_tabs.insert(tab.tab_id);
     auto existing = tab_items_.find(tab.tab_id);
     TabViewItem item{nullptr};
@@ -722,11 +802,34 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       item = existing->second;
     }
 
+    // SelectedBackgroundPath is a shape inside TabViewItem's control
+    // template, so Control::Background does not drive it. Override the
+    // ThemeResource at the item itself; this is the nearest resource scope
+    // and reliably updates both the body and native lower shoulder geometry.
+    const auto selected_background_key = winrt::box_value(
+        winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
+    const auto drag_background_key = winrt::box_value(
+        winrt::hstring{L"TabViewItemHeaderDragBackground"});
+    item.Resources().Insert(selected_background_key, toolbar_.Background());
+    item.Resources().Insert(drag_background_key, toolbar_.Background());
+
     const wchar_t* title = tab.title && *tab.title ? tab.title : L"New tab";
     winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
         item, winrt::hstring{title});
     item.IsClosable(tab.pinned == 0);
     item.IconSource(nullptr);
+    if (tab.favicon_url && *tab.favicon_url) {
+      try {
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap{
+            winrt::Windows::Foundation::Uri{tab.favicon_url}};
+        ImageIconSource source;
+        source.ImageSource(bitmap);
+        item.IconSource(source);
+      } catch (...) {
+        // Invalid or unsupported favicon URLs simply retain TabView's default
+        // no-icon layout.
+      }
+    }
     if (tab.loading) {
       StackPanel loading_header;
       loading_header.Orientation(Orientation::Horizontal);
@@ -763,6 +866,7 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       active_tab_loading_ = tab.loading != 0;
       active_url_ = tab.url ? tab.url : L"";
       address_box_.Text(active_url_);
+      UpdateAddressSecurityState(active_url_);
     }
   }
 
@@ -791,6 +895,62 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
   UpdateNativePage(active_url_);
   UpdateTitleBarRegions();
   UpdateTabShoulders();
+  // Selection activates SelectedBackgroundPath through x:Load during the
+  // next layout pass. Re-apply after that pass so the realized WinUI template
+  // receives the shared command-layer material and exposes its shoulders.
+  root_.DispatcherQueue().TryEnqueue([this] { UpdateTabShoulders(); });
+}
+
+void Shell::UpdateAddressSuggestions(std::wstring_view query) {
+  auto suggestions =
+      winrt::single_threaded_observable_vector<winrt::Windows::Foundation::
+                                                   IInspectable>();
+  if (query.empty()) {
+    address_box_.ItemsSource(suggestions);
+    return;
+  }
+
+  const auto lowercase = [](std::wstring_view value) {
+    std::wstring result(value);
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](wchar_t character) {
+                     return static_cast<wchar_t>(std::towlower(character));
+                   });
+    return result;
+  };
+  const std::wstring lowered_query = lowercase(query);
+  std::set<std::wstring> seen;
+  const auto append = [&](std::wstring_view value) {
+    if (value.empty() || suggestions.Size() >= 8) {
+      return;
+    }
+    std::wstring candidate(value);
+    if (seen.insert(lowercase(candidate)).second) {
+      suggestions.Append(winrt::box_value(winrt::hstring{candidate}));
+    }
+  };
+
+  if (query.find(L'.') != std::wstring_view::npos &&
+      query.find(L"://") == std::wstring_view::npos) {
+    append(std::wstring(L"https://") + std::wstring(query));
+  }
+  for (const auto& candidate : tab_suggestions_) {
+    if (lowercase(candidate).find(lowered_query) != std::wstring::npos) {
+      append(candidate);
+    }
+  }
+  address_box_.ItemsSource(suggestions);
+  address_box_.IsSuggestionListOpen(suggestions.Size() > 0);
+}
+
+void Shell::UpdateAddressSecurityState(std::wstring_view url) {
+  const bool secure = StartsWithInsensitive(url, L"https://");
+  security_button_.Content(ToolbarGlyph(secure ? L"\uE72E" : L"\uE946"));
+  const wchar_t* label = secure ? L"Connection is secure"
+                                : L"View site information";
+  ToolTipService::SetToolTip(security_button_, winrt::box_value(label));
+  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+      security_button_, label);
 }
 
 void Shell::UpdateTabShoulders() {
@@ -806,10 +966,21 @@ void Shell::UpdateTabShoulders() {
       return;
     }
 
+    // WinUI 3 2.2 resolves this ThemeResource from the control theme rather
+    // than the item's logical resource ancestry in an unpackaged XAML island.
+    // Set the template shape directly after realization so the selected tab,
+    // including TabView's built-in lower arcs, uses the command-layer brush.
+    if (const auto selected_background =
+            FindVisualChildByName(selected, L"SelectedBackgroundPath")
+                .try_as<winrt::Microsoft::UI::Xaml::Shapes::Shape>()) {
+      selected_background.Fill(toolbar_.Background());
+    }
+
     const auto origin = selected.TransformToVisual(root_).TransformPoint(
         winrt::Windows::Foundation::Point{0, 0});
-    const double shoulder_top =
-        std::min(kTabRowHeight, origin.Y + selected.ActualHeight()) - 8.0;
+    // Continue four DIPs into the command row so the selected tab visibly
+    // merges with it instead of ending at a detached one-pixel seam.
+    const double shoulder_top = kTabRowHeight - 4.0;
     Canvas::SetLeft(left_tab_shoulder_, origin.X - 8.0);
     Canvas::SetTop(left_tab_shoulder_, shoulder_top);
     Canvas::SetLeft(right_tab_shoulder_,
@@ -856,6 +1027,19 @@ void Shell::UpdateTitleBarRegions() {
         0, 0, passthrough_width, title_height}};
     non_client_pointer_source_.SetRegionRects(
         winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough,
+        rectangles);
+  }
+  non_client_pointer_source_.ClearRegionRects(
+      winrt::Microsoft::UI::Input::NonClientRegionKind::Caption);
+  const int caption_left = passthrough_width;
+  const int caption_right = std::max(caption_left,
+                                     static_cast<int>(client.right) -
+                                         right_inset);
+  if (caption_right > caption_left) {
+    const std::array rectangles = {winrt::Windows::Graphics::RectInt32{
+        caption_left, 0, caption_right - caption_left, title_height}};
+    non_client_pointer_source_.SetRegionRects(
+        winrt::Microsoft::UI::Input::NonClientRegionKind::Caption,
         rectangles);
   }
 }
@@ -1109,13 +1293,21 @@ void Shell::UpdateWindowRegion() {
   const UINT dpi = GetDpiForWindow(parent_);
   const double scale = static_cast<double>(dpi) / 96.0;
   const int tab_height = static_cast<int>(kTabRowHeight * scale + 0.5);
+  // AppWindowTitleBar owns the caption-button hover plate. Its actual height
+  // can exceed the nominal XAML row by a few physical pixels at fractional
+  // display scaling. Keep the island cut out for the complete native caption
+  // height so the plate can never be clipped by the toolbar surface.
+  const int native_caption_height = title_bar_ ? title_bar_.Height() : 0;
+  const int caption_cutout_height =
+      std::max(tab_height, native_caption_height);
   const int caption_width = title_bar_
                                 ? title_bar_.RightInset()
                                 : GetSystemMetricsForDpi(SM_CXSIZE, dpi) * 3;
   const int top_width =
       std::max(0, static_cast<int>(bounds.right) - caption_width);
-  HRGN top = CreateRectRgn(0, 0, top_width, tab_height);
-  HRGN body = CreateRectRgn(0, tab_height, bounds.right, bounds.bottom);
+  HRGN top = CreateRectRgn(0, 0, top_width, caption_cutout_height);
+  HRGN body =
+      CreateRectRgn(0, caption_cutout_height, bounds.right, bounds.bottom);
   CombineRgn(top, top, body, RGN_OR);
   DeleteObject(body);
   SetWindowRgn(island_window_, top, TRUE);  // The system owns `top` now.
@@ -1132,6 +1324,9 @@ void Shell::ApplySystemTheme() {
     const BOOL dark_mode = dark ? TRUE : FALSE;
     DwmSetWindowAttribute(parent_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_mode,
                           sizeof(dark_mode));
+    const DWM_SYSTEMBACKDROP_TYPE backdrop_type = DWMSBT_TABBEDWINDOW;
+    DwmSetWindowAttribute(parent_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
+                          sizeof(backdrop_type));
     if (title_bar_) {
       using winrt::Microsoft::UI::Windowing::TitleBarTheme;
       title_bar_.PreferredTheme(dark ? TitleBarTheme::Dark
@@ -1159,9 +1354,13 @@ void Shell::ApplySystemTheme() {
     // Sharing one brush instance also lets TabView's native lower arcs merge
     // into the toolbar instead of reading as a flat seam between two colors.
     const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
-    const auto commanding_layer = ThemeBrush(
-        L"LayerOnMicaBaseAltFillColorDefaultBrush",
-        dark ? Color(58, 58, 58, 115) : Color(255, 255, 255, 179));
+    // Chromium's renderer paints beneath the toolbar but not beneath the
+    // custom title row. A translucent command brush therefore composites to
+    // two different colors even when both controls share the same resource.
+    // Use an opaque Windows 11 commanding surface over the Mica Alt base so
+    // the active tab and toolbar remain visually continuous.
+    const auto commanding_layer = SolidColorBrush{
+        dark ? Color(45, 45, 45) : Color(243, 243, 243)};
     const auto content_layer = ThemeBrush(
         L"LayerFillColorDefaultBrush",
         dark ? Color(58, 58, 58, 76) : Color(255, 255, 255, 128));
@@ -1179,6 +1378,14 @@ void Shell::ApplySystemTheme() {
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderDragBackground"});
     const auto shoulder_key =
         winrt::box_value(winrt::hstring{L"TabViewBorderBrush"});
+    // The WinUI control theme owns SelectedBackgroundPath in an unpackaged
+    // island, so publish the override at the application resource scope as
+    // well as the TabView/item scopes. ThemeResource then updates the loaded
+    // path and its native shoulder geometry immediately.
+    const auto app_resources =
+        winrt::Microsoft::UI::Xaml::Application::Current().Resources();
+    app_resources.Insert(selected_key, commanding_layer);
+    app_resources.Insert(drag_key, commanding_layer);
     tab_view_.Resources().Insert(selected_key, commanding_layer);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
     // The separate shoulder paths provide the complete lower connector. Keep

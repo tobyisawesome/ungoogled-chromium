@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <commctrl.h>
@@ -75,6 +76,8 @@ class Shell final {
               const wchar_t* text = nullptr,
               uint32_t event_flags = 0) const;
   void UpdateTabs(const WcsWindowState& state);
+  void UpdateAddressSuggestions(std::wstring_view query);
+  void UpdateAddressSecurityState(std::wstring_view url);
   void UpdateTabShoulders();
   void UpdateNativePage(std::wstring_view url);
   void ResizeIsland();
@@ -116,16 +119,19 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
-  winrt::Microsoft::UI::Xaml::Controls::TextBox address_box_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
   ToolbarButton back_button_{nullptr};
   ToolbarButton forward_button_{nullptr};
   ToolbarButton reload_button_{nullptr};
+  ToolbarButton security_button_{nullptr};
+  ToolbarButton favorite_button_{nullptr};
   ToolbarButton profile_button_{nullptr};
   ToolbarButton menu_button_{nullptr};
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;
+  std::vector<std::wstring> tab_suggestions_;
   std::map<int64_t, winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem>
       tab_pin_menu_items_;
 };

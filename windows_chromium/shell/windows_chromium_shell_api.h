@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 2u
+#define WCS_API_VERSION 3u
 
 typedef void* WcsShellHandle;
 
@@ -52,6 +52,8 @@ typedef enum WcsCommand {
   WCS_COMMAND_EXIT = 40,
   WCS_COMMAND_SET_RESTORE_ON_STARTUP = 41,
   WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
+  WCS_COMMAND_BOOKMARK_PAGE = 43,
+  WCS_COMMAND_SHOW_SITE_INFO = 44,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -79,6 +81,7 @@ typedef struct WcsTabState {
   int32_t index;
   const wchar_t* title;
   const wchar_t* url;
+  const wchar_t* favicon_url;
   int32_t active;
   int32_t pinned;
   int32_t loading;
