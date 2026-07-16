@@ -250,7 +250,16 @@ index c5b196b2be..59b150f585 100644
    // Destroy any remaining WebContents early on. Doing so may result in
    // calling back to one of the Views/LayoutManagers or supporting classes of
    // BrowserView. By destroying here we ensure all said classes are valid.
-@@ -4139,6 +4194,9 @@ BookmarkBar::State BrowserView::bookmark_bar_state() const {
+@@ -4135,10 +4190,18 @@ void BrowserView::ClearForceShowBookmarkBarFlag(
+ }
+
+ BookmarkBar::State BrowserView::bookmark_bar_state() const {
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    return BookmarkBar::HIDDEN;
++  }
++#endif
+   return BookmarkBarController::From(browser_.get())->bookmark_bar_state();
  }
 
  void BrowserView::UpdateTabSearchBubbleHost() {
@@ -260,7 +269,7 @@ index c5b196b2be..59b150f585 100644
    if (!GetIsNormalType()) {
      return;
    }
-@@ -5003,6 +5061,34 @@ void BrowserView::AddedToWidget() {
+@@ -5003,6 +5066,38 @@ void BrowserView::AddedToWidget() {
    dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
        kBrowserDialogAnchorElementId, *this);
 
@@ -282,6 +291,10 @@ index c5b196b2be..59b150f585 100644
 +    toolbar_->SetPaintToLayer();
 +    toolbar_->layer()->SetOpacity(0.0f);
 +    toolbar_->SetCanProcessEventsWithinSubtree(false);
++    if (bookmark_bar_view_) {
++      bookmark_bar_view_->SetBookmarkBarState(
++          BookmarkBar::HIDDEN, BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
++    }
 +    if (auto* native_frame_view =
 +            views::AsViewClass<BrowserFrameViewWin>(GetFrameView())) {
 +      native_frame_view->SetCurveBrowserNativeShellEnabled(true);
@@ -336,7 +349,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,491 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -821,6 +834,11 @@ index 0000000000..4afe757f1b
 +        location_bar->ShowPageInfoDialog();
 +      }
 +      break;
++    case WCS_COMMAND_FOCUS_CONTENT:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        contents->Focus();
++      }
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
@@ -905,7 +923,7 @@ new file mode 100644
 index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,121 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -920,7 +938,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 3u
++#define WCS_API_VERSION 4u
 +
 +typedef void* WcsShellHandle;
 +
@@ -960,6 +978,7 @@ index 0000000000..d96c09a84e
 +  WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
 +  WCS_COMMAND_BOOKMARK_PAGE = 43,
 +  WCS_COMMAND_SHOW_SITE_INFO = 44,
++  WCS_COMMAND_FOCUS_CONTENT = 45,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {
@@ -1007,12 +1026,38 @@ index 0000000000..d96c09a84e
 +  int32_t restore_on_startup;
 +} WcsWindowState;
 +
++typedef enum WcsContextMenuItemType {
++  WCS_CONTEXT_MENU_COMMAND = 0,
++  WCS_CONTEXT_MENU_SEPARATOR = 1,
++  WCS_CONTEXT_MENU_SUBMENU = 2,
++  WCS_CONTEXT_MENU_CHECK = 3,
++  WCS_CONTEXT_MENU_RADIO = 4,
++} WcsContextMenuItemType;
++
++typedef struct WcsContextMenuItem {
++  uint32_t size;
++  WcsContextMenuItemType type;
++  int32_t command_id;
++  int32_t parent_index;
++  const wchar_t* label;
++  int32_t enabled;
++  int32_t checked;
++} WcsContextMenuItem;
++
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
 diff --git a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
 index 625e3b90c0..073ad7f811 100644
 --- a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
 +++ b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
-@@ -13,8 +13,12 @@
+@@ -6,6 +6,7 @@
+ 
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+@@ -13,10 +14,17 @@
  #include "base/memory/raw_ptr.h"
  #include "base/observer_list.h"
  #include "base/scoped_observation.h"
@@ -1024,8 +1069,13 @@ index 625e3b90c0..073ad7f811 100644
 +#endif
  #include "chrome/app/chrome_command_ids.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/ui/views/frame/curve_browser_shell_api_win.h"
++#endif
  #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-@@ -40,9 +44,73 @@
+ #include "chrome/common/chrome_switches.h"
+ #include "components/lens/buildflags.h"
+@@ -40,9 +48,94 @@
  #include "ui/views/view.h"
  #include "ui/views/view_observer.h"
  #include "ui/views/widget/widget.h"
@@ -1038,59 +1088,80 @@ index 625e3b90c0..073ad7f811 100644
 +#if BUILDFLAG(IS_WIN)
 +namespace {
 +
-+void PopulateWindowsContextMenu(HMENU menu, const ui::MenuModel* model) {
++void PopulateWinUiContextMenu(std::vector<WcsContextMenuItem>* items,
++                              std::vector<std::wstring>* labels,
++                              const ui::MenuModel* model,
++                              int32_t parent_index) {
 +  for (size_t index = 0; index < model->GetItemCount(); ++index) {
 +    if (!model->IsVisibleAt(index)) {
 +      continue;
 +    }
 +    const ui::MenuModel::ItemType type = model->GetTypeAt(index);
-+    if (type == ui::MenuModel::TYPE_SEPARATOR) {
-+      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-+      continue;
-+    }
-+
-+    UINT flags = MF_STRING;
-+    if (!model->IsEnabledAt(index) || type == ui::MenuModel::TYPE_TITLE) {
-+      flags |= MF_DISABLED | MF_GRAYED;
-+    }
-+    if ((type == ui::MenuModel::TYPE_CHECK ||
-+         type == ui::MenuModel::TYPE_RADIO) &&
-+        model->IsItemCheckedAt(index)) {
-+      flags |= MF_CHECKED;
-+    }
-+
-+    const std::wstring label = base::UTF16ToWide(model->GetLabelAt(index));
-+    if (type == ui::MenuModel::TYPE_SUBMENU ||
-+        type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU) {
-+      HMENU submenu = CreatePopupMenu();
-+      if (const ui::MenuModel* submenu_model =
-+              model->GetSubmenuModelAt(index)) {
-+        PopulateWindowsContextMenu(submenu, submenu_model);
-+      }
-+      AppendMenuW(menu, flags | MF_POPUP,
-+                  reinterpret_cast<UINT_PTR>(submenu), label.c_str());
-+      continue;
-+    }
 +    if (type == ui::MenuModel::TYPE_BUTTON_ITEM) {
 +      continue;
 +    }
-+    AppendMenuW(menu, flags, model->GetCommandIdAt(index), label.c_str());
++
++    WcsContextMenuItem item{};
++    item.size = sizeof(item);
++    item.command_id = model->GetCommandIdAt(index);
++    item.parent_index = parent_index;
++    item.enabled = model->IsEnabledAt(index) &&
++                   type != ui::MenuModel::TYPE_TITLE;
++    item.checked =
++        (type == ui::MenuModel::TYPE_CHECK ||
++         type == ui::MenuModel::TYPE_RADIO) &&
++        model->IsItemCheckedAt(index);
++    if (type == ui::MenuModel::TYPE_SEPARATOR) {
++      item.type = WCS_CONTEXT_MENU_SEPARATOR;
++    } else if (type == ui::MenuModel::TYPE_SUBMENU ||
++               type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU) {
++      item.type = WCS_CONTEXT_MENU_SUBMENU;
++    } else if (type == ui::MenuModel::TYPE_CHECK) {
++      item.type = WCS_CONTEXT_MENU_CHECK;
++    } else if (type == ui::MenuModel::TYPE_RADIO) {
++      item.type = WCS_CONTEXT_MENU_RADIO;
++    } else {
++      item.type = WCS_CONTEXT_MENU_COMMAND;
++    }
++
++    const int32_t item_index = static_cast<int32_t>(items->size());
++    items->push_back(item);
++    labels->push_back(base::UTF16ToWide(model->GetLabelAt(index)));
++    if (type == ui::MenuModel::TYPE_SUBMENU ||
++        type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU) {
++      if (const ui::MenuModel* submenu_model =
++              model->GetSubmenuModelAt(index)) {
++        PopulateWinUiContextMenu(items, labels, submenu_model, item_index);
++      }
++    }
 +  }
 +}
 +
-+int RunWindowsContextMenu(HWND owner,
-+                          const gfx::Point& screen_point,
-+                          const ui::MenuModel* model) {
-+  HMENU menu = CreatePopupMenu();
-+  if (!menu) {
-+    return 0;
++int RunWinUiContextMenu(HWND owner,
++                        const gfx::Point& screen_point,
++                        const ui::MenuModel* model) {
++  const auto shell = reinterpret_cast<WcsShellHandle>(
++      GetPropW(owner, L"CurveBrowserNativeShellActive"));
++  HMODULE module = GetModuleHandleW(L"curve_browser_shell.dll");
++  if (!shell || !module) {
++    return -1;
 +  }
-+  PopulateWindowsContextMenu(menu, model);
-+  const int command = TrackPopupMenuEx(
-+      menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
-+      screen_point.x(), screen_point.y(), owner, nullptr);
-+  DestroyMenu(menu);
-+  return command;
++  using ShowContextMenuFn = int32_t(__stdcall*)(
++      WcsShellHandle, const WcsContextMenuItem*, size_t, int32_t, int32_t);
++  const auto show_context_menu = reinterpret_cast<ShowContextMenuFn>(
++      GetProcAddress(module, "WcsShowContextMenu"));
++  if (!show_context_menu) {
++    return -1;
++  }
++
++  std::vector<WcsContextMenuItem> items;
++  std::vector<std::wstring> labels;
++  PopulateWinUiContextMenu(&items, &labels, model, -1);
++  for (size_t index = 0; index < items.size(); ++index) {
++    items[index].label = labels[index].c_str();
++  }
++  return show_context_menu(shell, items.data(), items.size(),
++                           screen_point.x(), screen_point.y());
 +}
 +
 +}  // namespace
@@ -1099,15 +1170,17 @@ index 625e3b90c0..073ad7f811 100644
  class RenderViewContextMenuViews::SubmenuViewObserver
      : public views::ViewObserver,
        public views::WidgetObserver {
-@@ -399,6 +467,16 @@ void RenderViewContextMenuViews::Show() {
+@@ -399,6 +492,18 @@ void RenderViewContextMenuViews::Show() {
    if (screen_position_client) {
      screen_position_client->ConvertPointToScreen(target_window, &screen_point);
    }
 +#if BUILDFLAG(IS_WIN)
 +  HWND owner = views::HWNDForWidget(top_level_widget);
 +  if (owner && GetPropW(owner, L"CurveBrowserNativeShellActive")) {
++    base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
 +    if (const int command =
-+            RunWindowsContextMenu(owner, screen_point, &menu_model())) {
++            RunWinUiContextMenu(owner, screen_point, &menu_model());
++        command >= 0) {
 +      ExecuteCommand(command, 0);
 +    }
 +    return;

@@ -51,6 +51,10 @@ class Shell final {
   HRESULT Update(const WcsWindowState& state);
   void SetVisible(bool visible);
   HRESULT Capture(const wchar_t* output_path);
+  int32_t ShowContextMenu(const WcsContextMenuItem* items,
+                          size_t item_count,
+                          int32_t screen_x,
+                          int32_t screen_y);
 
  private:
   using ToolbarButton = winrt::Microsoft::UI::Xaml::Controls::Button;
@@ -79,6 +83,10 @@ class Shell final {
   void UpdateAddressSuggestions(std::wstring_view query);
   void UpdateAddressSecurityState(std::wstring_view url);
   void UpdateTabShoulders();
+  void UpdateCaptionButtonVisual(
+      winrt::Microsoft::UI::Input::NonClientRegionKind kind,
+      int state);
+  void UpdateMaximizeGlyph();
   void UpdateNativePage(std::wstring_view url);
   void ResizeIsland();
   void UpdateWindowRegion();
@@ -101,6 +109,7 @@ class Shell final {
   WcsHostCallbacks callbacks_{};
   bool visible_ = true;
   bool updating_ = false;
+  bool suppress_address_suggestions_ = false;
   bool native_page_visible_ = false;
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
@@ -119,6 +128,7 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Grid caption_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
   ToolbarButton back_button_{nullptr};
@@ -128,6 +138,9 @@ class Shell final {
   ToolbarButton favorite_button_{nullptr};
   ToolbarButton profile_button_{nullptr};
   ToolbarButton menu_button_{nullptr};
+  ToolbarButton minimize_button_{nullptr};
+  ToolbarButton maximize_button_{nullptr};
+  ToolbarButton close_button_{nullptr};
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;

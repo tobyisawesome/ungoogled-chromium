@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 3u
+#define WCS_API_VERSION 4u
 
 typedef void* WcsShellHandle;
 
@@ -54,6 +54,7 @@ typedef enum WcsCommand {
   WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
   WCS_COMMAND_BOOKMARK_PAGE = 43,
   WCS_COMMAND_SHOW_SITE_INFO = 44,
+  WCS_COMMAND_FOCUS_CONTENT = 45,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -101,6 +102,26 @@ typedef struct WcsWindowState {
   int32_t restore_on_startup;
 } WcsWindowState;
 
+typedef enum WcsContextMenuItemType {
+  WCS_CONTEXT_MENU_COMMAND = 0,
+  WCS_CONTEXT_MENU_SEPARATOR = 1,
+  WCS_CONTEXT_MENU_SUBMENU = 2,
+  WCS_CONTEXT_MENU_CHECK = 3,
+  WCS_CONTEXT_MENU_RADIO = 4,
+} WcsContextMenuItemType;
+
+// A flat description of a menu tree. `parent_index` is -1 for root items or
+// the zero-based index of a preceding WCS_CONTEXT_MENU_SUBMENU item.
+typedef struct WcsContextMenuItem {
+  uint32_t size;
+  WcsContextMenuItemType type;
+  int32_t command_id;
+  int32_t parent_index;
+  const wchar_t* label;
+  int32_t enabled;
+  int32_t checked;
+} WcsContextMenuItem;
+
 extern "C" {
 
 WCS_EXPORT uint32_t __stdcall WcsGetApiVersion(void);
@@ -116,6 +137,14 @@ WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
 // The operation is asynchronous; callers may watch for the output file.
 WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
                                              const wchar_t* output_path);
+// Displays a WinUI MenuFlyout at a client-window screen coordinate and
+// returns its selected Chromium command id, or -1 when dismissed.
+WCS_EXPORT int32_t __stdcall WcsShowContextMenu(
+    WcsShellHandle shell,
+    const WcsContextMenuItem* items,
+    size_t item_count,
+    int32_t screen_x,
+    int32_t screen_y);
 
 }  // extern "C"
 

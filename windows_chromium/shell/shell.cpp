@@ -18,6 +18,7 @@
 #include <utility>
 
 #include <dwmapi.h>
+#include <winrt/Microsoft.UI.Composition.SystemBackdrops.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.h>
@@ -46,6 +47,25 @@ constexpr double kTabRowHeight = 48.0;
 constexpr double kToolbarHeight = 48.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
+constexpr UINT kDeferredResizeMessage = WM_APP + 0x351;
+
+winrt::Microsoft::UI::Xaml::DependencyObject FindNamedDescendant(
+    const winrt::Microsoft::UI::Xaml::DependencyObject& root,
+    std::wstring_view name) {
+  using winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper;
+  const int count = VisualTreeHelper::GetChildrenCount(root);
+  for (int index = 0; index < count; ++index) {
+    const auto child = VisualTreeHelper::GetChild(root, index);
+    const auto element = child.try_as<winrt::Microsoft::UI::Xaml::FrameworkElement>();
+    if (element && element.Name() == name) {
+      return child;
+    }
+    if (const auto nested = FindNamedDescendant(child, name)) {
+      return nested;
+    }
+  }
+  return nullptr;
+}
 
 void EnsureSelfContainedRuntimeLoaded();
 
@@ -353,6 +373,9 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   xaml_source_.Initialize(
       winrt::Microsoft::UI::GetWindowIdFromWindow(parent_));
   xaml_source_.Content(root_);
+  winrt::Microsoft::UI::Xaml::Media::MicaBackdrop mica_alt;
+  mica_alt.Kind(winrt::Microsoft::UI::Composition::SystemBackdrops::MicaKind::BaseAlt);
+  xaml_source_.SystemBackdrop(mica_alt);
   island_window_ = winrt::Microsoft::UI::GetWindowFromWindowId(
       xaml_source_.SiteBridge().WindowId());
   EnsureXamlMessageTranslation();
@@ -370,7 +393,7 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   DwmSetWindowAttribute(parent_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
                         sizeof(backdrop_type));
   SetPropW(parent_, L"CurveBrowserNativeShellActive",
-           reinterpret_cast<HANDLE>(1));
+           reinterpret_cast<HANDLE>(this));
 }
 
 Shell::~Shell() {
@@ -433,11 +456,31 @@ void Shell::BuildVisualTree() {
   // its selected item and shoulders sink directly into the command layer.
   tab_view_.Height(40);
   tab_view_.Padding(Thickness{0});
-  tab_view_.Margin(Thickness{8, 0, 0, 0});
+  const double caption_width = title_bar_
+                                   ? title_bar_.RightInset() * 96.0 /
+                                         GetDpiForWindow(parent_)
+                                   : 138.0;
+  tab_view_.Margin(Thickness{0, 0, caption_width, 0});
   tab_view_.VerticalAlignment(VerticalAlignment::Bottom);
   Grid::SetRow(tab_view_, 0);
   Canvas::SetZIndex(tab_view_, 2);
   root_.Children().Append(tab_view_);
+  tab_view_.Loaded([this](const auto&, const auto&) {
+    tab_view_.ApplyTemplate();
+    tab_view_.DispatcherQueue().TryEnqueue([this] {
+      if (const auto add_button =
+              FindVisualChildByName(tab_view_, L"AddButton")
+                  .try_as<Button>()) {
+        add_button.Height(32);
+        add_button.Width(32);
+        add_button.Margin(Thickness{0});
+        add_button.Padding(Thickness{0});
+        add_button.VerticalAlignment(VerticalAlignment::Center);
+        add_button.VerticalContentAlignment(VerticalAlignment::Center);
+        add_button.HorizontalContentAlignment(HorizontalAlignment::Center);
+      }
+    });
+  });
   tab_view_.SizeChanged(
       [this](const auto&, const auto&) {
         UpdateTitleBarRegions();
@@ -475,6 +518,69 @@ void Shell::BuildVisualTree() {
   // wedges remain visible only in the transparent space beside the selected
   // item and never participate in hit testing.
   root_.Children().InsertAt(0, tab_shoulder_layer_);
+
+  // Draw the caption controls on the same transparent XAML/Mica surface as
+  // the tabs. Their rectangles are registered below as true Windows
+  // non-client regions, retaining snap layouts and native window commands
+  // without exposing Chromium's opaque frame beneath a cutout.
+  caption_host_ = Grid{};
+  caption_host_.Width(caption_width);
+  caption_host_.Height(kTabRowHeight);
+  caption_host_.HorizontalAlignment(HorizontalAlignment::Right);
+  caption_host_.VerticalAlignment(VerticalAlignment::Top);
+  caption_host_.IsHitTestVisible(false);
+  Grid::SetRow(caption_host_, 0);
+  Canvas::SetZIndex(caption_host_, 10);
+  for (int index = 0; index < 3; ++index) {
+    ColumnDefinition column;
+    column.Width(GridLength{1, GridUnitType::Star});
+    caption_host_.ColumnDefinitions().Append(column);
+  }
+  const auto make_caption_button = [](std::wstring_view glyph,
+                                      std::wstring_view name) {
+    Button button;
+    button.Content(Glyph(glyph, 10));
+    button.HorizontalAlignment(HorizontalAlignment::Stretch);
+    button.VerticalAlignment(VerticalAlignment::Stretch);
+    button.BorderThickness(Thickness{0});
+    button.CornerRadius(CornerRadius{0});
+    button.Padding(Thickness{0});
+    button.Background(SolidColorBrush{Color(0, 0, 0, 0)});
+    button.IsHitTestVisible(false);
+    winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+        button, name);
+    return button;
+  };
+  minimize_button_ = make_caption_button(L"\uE921", L"Minimize");
+  maximize_button_ = make_caption_button(L"\uE922", L"Maximize");
+  close_button_ = make_caption_button(L"\uE8BB", L"Close");
+  Grid::SetColumn(minimize_button_, 0);
+  Grid::SetColumn(maximize_button_, 1);
+  Grid::SetColumn(close_button_, 2);
+  caption_host_.Children().Append(minimize_button_);
+  caption_host_.Children().Append(maximize_button_);
+  caption_host_.Children().Append(close_button_);
+  root_.Children().Append(caption_host_);
+
+  if (non_client_pointer_source_) {
+    non_client_pointer_source_.PointerEntered(
+        [this](const auto&, const auto& args) {
+          UpdateCaptionButtonVisual(args.RegionKind(), 1);
+        });
+    non_client_pointer_source_.PointerExited(
+        [this](const auto&, const auto& args) {
+          UpdateCaptionButtonVisual(args.RegionKind(), 0);
+        });
+    non_client_pointer_source_.PointerPressed(
+        [this](const auto&, const auto& args) {
+          UpdateCaptionButtonVisual(args.RegionKind(), 2);
+        });
+    non_client_pointer_source_.PointerReleased(
+        [this](const auto&, const auto& args) {
+          UpdateCaptionButtonVisual(args.RegionKind(),
+                                    args.IsPointInRegion() ? 1 : 0);
+        });
+  }
 
   tab_view_.AddTabButtonClick([this](const TabView&, const auto&) {
     if (!updating_) {
@@ -605,10 +711,35 @@ void Shell::BuildToolbar() {
   address_box_.PlaceholderText(L"Search or enter an address");
   address_box_.Height(32);
   address_box_.Margin(Thickness{4, 0, 8, 0});
-  address_box_.Padding(Thickness{32, 0, 32, 0});
+  address_box_.Padding(Thickness{44, 5, 44, 6});
+  address_box_.QueryIcon(nullptr);
+  address_box_.Loaded([this](const auto&, const auto&) {
+    address_box_.ApplyTemplate();
+    address_box_.DispatcherQueue().TryEnqueue([this] {
+      if (const auto content =
+              FindNamedDescendant(address_box_, L"ContentElement")
+                  .try_as<ScrollViewer>()) {
+        content.Padding(Thickness{44, 5, 44, 6});
+      }
+      if (const auto placeholder =
+              FindNamedDescendant(address_box_,
+                                  L"PlaceholderTextContentPresenter")
+                  .try_as<ContentControl>()) {
+        placeholder.Padding(Thickness{44, 5, 44, 6});
+      }
+      if (const auto query_button =
+              FindNamedDescendant(address_box_, L"QueryButton")
+                  .try_as<Button>()) {
+        query_button.Visibility(Visibility::Collapsed);
+      }
+    });
+  });
+  address_box_.LostFocus([this](const auto&, const auto&) {
+    address_box_.IsSuggestionListOpen(false);
+  });
   address_host.Children().Append(address_box_);
   address_box_.QuerySubmitted(
-      [this](const AutoSuggestBox&,
+      [this](const AutoSuggestBox& sender,
              const AutoSuggestBoxQuerySubmittedEventArgs& args) {
         std::wstring value = args.QueryText().c_str();
         if (const auto chosen = args.ChosenSuggestion()) {
@@ -621,31 +752,44 @@ void Shell::BuildToolbar() {
           }
         }
         if (!value.empty()) {
+          sender.IsSuggestionListOpen(false);
+          sender.ItemsSource(nullptr);
           Invoke(WCS_COMMAND_NAVIGATE, active_tab_id_, active_index_,
                  value.c_str());
+          SetFocus(parent_);
+          Invoke(WCS_COMMAND_FOCUS_CONTENT, active_tab_id_, active_index_);
+          sender.DispatcherQueue().TryEnqueue([sender] {
+            sender.IsSuggestionListOpen(false);
+            sender.ItemsSource(nullptr);
+          });
         }
       });
   address_box_.TextChanged(
       [this](const AutoSuggestBox& sender,
              const AutoSuggestBoxTextChangedEventArgs&) {
+        if (suppress_address_suggestions_) {
+          suppress_address_suggestions_ = false;
+          sender.IsSuggestionListOpen(false);
+          return;
+        }
         if (!updating_) {
           UpdateAddressSuggestions(sender.Text().c_str());
         }
       });
   security_button_ = MakeGlyphButton(L"\uE72E", L"View site information",
                                      WCS_COMMAND_SHOW_SITE_INFO);
-  security_button_.Width(28);
-  security_button_.Height(28);
+  security_button_.Width(32);
+  security_button_.Height(32);
   security_button_.HorizontalAlignment(HorizontalAlignment::Left);
-  security_button_.Margin(Thickness{6, 0, 0, 0});
+  security_button_.Margin(Thickness{4, 0, 0, 0});
   address_host.Children().Append(security_button_);
 
   favorite_button_ = MakeGlyphButton(L"\uE734", L"Add this page to favorites",
                                      WCS_COMMAND_BOOKMARK_PAGE);
-  favorite_button_.Width(28);
-  favorite_button_.Height(28);
+  favorite_button_.Width(32);
+  favorite_button_.Height(32);
   favorite_button_.HorizontalAlignment(HorizontalAlignment::Right);
-  favorite_button_.Margin(Thickness{0, 0, 10, 0});
+  favorite_button_.Margin(Thickness{0, 0, 8, 0});
   address_host.Children().Append(favorite_button_);
 
   profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles",
@@ -865,7 +1009,10 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       active_tab_id_ = tab.tab_id;
       active_tab_loading_ = tab.loading != 0;
       active_url_ = tab.url ? tab.url : L"";
-      address_box_.Text(active_url_);
+      if (address_box_.Text() != active_url_) {
+        suppress_address_suggestions_ = true;
+        address_box_.Text(active_url_);
+      }
       UpdateAddressSecurityState(active_url_);
     }
   }
@@ -978,20 +1125,58 @@ void Shell::UpdateTabShoulders() {
 
     const auto origin = selected.TransformToVisual(root_).TransformPoint(
         winrt::Windows::Foundation::Point{0, 0});
-    // Continue four DIPs into the command row so the selected tab visibly
-    // merges with it instead of ending at a detached one-pixel seam.
-    const double shoulder_top = kTabRowHeight - 4.0;
+    // The unpackaged-island TabView template does not expose its lower arcs.
+    // Draw exactly one pair of 8-DIP shoulders in the bottom of the tab row.
+    // They curve into the command surface and terminate at its boundary;
+    // nothing is painted over the toolbar itself.
     Canvas::SetLeft(left_tab_shoulder_, origin.X - 8.0);
-    Canvas::SetTop(left_tab_shoulder_, shoulder_top);
+    Canvas::SetTop(left_tab_shoulder_, kTabRowHeight - 8.0);
     Canvas::SetLeft(right_tab_shoulder_,
                     origin.X + selected.ActualWidth());
-    Canvas::SetTop(right_tab_shoulder_, shoulder_top);
+    Canvas::SetTop(right_tab_shoulder_, kTabRowHeight - 8.0);
     left_tab_shoulder_.Visibility(Visibility::Visible);
     right_tab_shoulder_.Visibility(Visibility::Visible);
   } catch (...) {
     left_tab_shoulder_.Visibility(Visibility::Collapsed);
     right_tab_shoulder_.Visibility(Visibility::Collapsed);
   }
+}
+
+void Shell::UpdateCaptionButtonVisual(
+    winrt::Microsoft::UI::Input::NonClientRegionKind kind,
+    int state) {
+  using winrt::Microsoft::UI::Input::NonClientRegionKind;
+  ToolbarButton button{nullptr};
+  if (kind == NonClientRegionKind::Minimize) {
+    button = minimize_button_;
+  } else if (kind == NonClientRegionKind::Maximize) {
+    button = maximize_button_;
+  } else if (kind == NonClientRegionKind::Close) {
+    button = close_button_;
+  }
+  if (!button) {
+    return;
+  }
+
+  auto color = Color(0, 0, 0, 0);
+  if (state > 0 && kind == NonClientRegionKind::Close) {
+    color = state == 2 ? Color(162, 29, 17) : Color(196, 43, 28);
+  } else if (state == 2) {
+    color = Color(255, 255, 255, 32);
+  } else if (state == 1) {
+    color = Color(255, 255, 255, 20);
+  }
+  button.Background(SolidColorBrush{color});
+}
+
+void Shell::UpdateMaximizeGlyph() {
+  if (!maximize_button_) {
+    return;
+  }
+  maximize_button_.Content(Glyph(IsZoomed(parent_) ? L"\uE923" : L"\uE922",
+                                  10));
+  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+      maximize_button_, IsZoomed(parent_) ? L"Restore" : L"Maximize");
 }
 
 void Shell::UpdateTitleBarRegions() {
@@ -1041,6 +1226,30 @@ void Shell::UpdateTitleBarRegions() {
     non_client_pointer_source_.SetRegionRects(
         winrt::Microsoft::UI::Input::NonClientRegionKind::Caption,
         rectangles);
+  }
+
+  using winrt::Microsoft::UI::Input::NonClientRegionKind;
+  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Minimize);
+  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Maximize);
+  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Close);
+  if (right_inset > 0) {
+    const int button_left = static_cast<int>(client.right) - right_inset;
+    const int first_width = right_inset / 3;
+    const int second_width = right_inset / 3;
+    const int third_width = right_inset - first_width - second_width;
+    const std::array minimize_rect = {winrt::Windows::Graphics::RectInt32{
+        button_left, 0, first_width, title_height}};
+    const std::array maximize_rect = {winrt::Windows::Graphics::RectInt32{
+        button_left + first_width, 0, second_width, title_height}};
+    const std::array close_rect = {winrt::Windows::Graphics::RectInt32{
+        button_left + first_width + second_width, 0, third_width,
+        title_height}};
+    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Minimize,
+                                               minimize_rect);
+    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Maximize,
+                                               maximize_rect);
+    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Close,
+                                               close_rect);
   }
 }
 
@@ -1226,6 +1435,93 @@ HRESULT Shell::Capture(const wchar_t* output_path) {
   }
 }
 
+int32_t Shell::ShowContextMenu(const WcsContextMenuItem* items,
+                               size_t item_count,
+                               int32_t screen_x,
+                               int32_t screen_y) {
+  if (!items || !item_count || !root_ || !IsWindow(parent_)) {
+    return -1;
+  }
+
+  MenuFlyout flyout;
+  std::map<int32_t, MenuFlyoutSubItem> submenus;
+  int32_t selected_command = -1;
+  bool closed = false;
+
+  const auto append_item =
+      [&](int32_t parent_index, const MenuFlyoutItemBase& item) {
+        if (parent_index >= 0) {
+          const auto parent = submenus.find(parent_index);
+          if (parent != submenus.end()) {
+            parent->second.Items().Append(item);
+          }
+          return;
+        }
+        flyout.Items().Append(item);
+      };
+
+  for (size_t index = 0; index < item_count; ++index) {
+    const WcsContextMenuItem& source = items[index];
+    if (source.size < sizeof(WcsContextMenuItem)) {
+      continue;
+    }
+    if (source.type == WCS_CONTEXT_MENU_SEPARATOR) {
+      append_item(source.parent_index, MenuFlyoutSeparator{});
+      continue;
+    }
+    if (source.type == WCS_CONTEXT_MENU_SUBMENU) {
+      MenuFlyoutSubItem submenu;
+      submenu.Text(source.label ? source.label : L"");
+      submenu.IsEnabled(source.enabled != 0);
+      submenus.emplace(static_cast<int32_t>(index), submenu);
+      append_item(source.parent_index, submenu);
+      continue;
+    }
+
+    MenuFlyoutItem item;
+    item.Text(source.label ? source.label : L"");
+    item.IsEnabled(source.enabled != 0);
+    const int32_t command = source.command_id;
+    item.Click([&flyout, &selected_command, command](
+                   const winrt::Windows::Foundation::IInspectable&,
+                   const winrt::Microsoft::UI::Xaml::RoutedEventArgs&) {
+      selected_command = command;
+      flyout.Hide();
+    });
+    append_item(source.parent_index, item);
+  }
+
+  flyout.Closed([&closed](
+                    const winrt::Windows::Foundation::IInspectable&,
+                    const winrt::Windows::Foundation::IInspectable&) {
+    closed = true;
+  });
+
+  POINT client_point{screen_x, screen_y};
+  ScreenToClient(parent_, &client_point);
+  const float scale = static_cast<float>(GetDpiForWindow(parent_)) / 96.0f;
+  winrt::Microsoft::UI::Xaml::Controls::Primitives::FlyoutShowOptions options;
+  options.Position(winrt::Windows::Foundation::Point{
+      client_point.x / scale, client_point.y / scale});
+  options.ShowMode(
+      winrt::Microsoft::UI::Xaml::Controls::Primitives::FlyoutShowMode::Standard);
+  flyout.ShowAt(root_, options);
+
+  MSG message{};
+  while (!closed) {
+    const BOOL result = GetMessageW(&message, nullptr, 0, 0);
+    if (result <= 0) {
+      if (result == 0) {
+        PostQuitMessage(static_cast<int>(message.wParam));
+      }
+      break;
+    }
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+  }
+  return selected_command;
+}
+
 winrt::fire_and_forget Shell::CaptureAsync(std::wstring output_path) {
   try {
     winrt::Microsoft::UI::Xaml::Media::Imaging::RenderTargetBitmap bitmap;
@@ -1282,35 +1578,18 @@ void Shell::ResizeIsland() {
   xaml_source_.SiteBridge().MoveAndResize(
       winrt::Windows::Graphics::RectInt32{0, 0, client.right, height});
   UpdateWindowRegion();
+  UpdateTitleBarRegions();
+  UpdateMaximizeGlyph();
 }
 
 void Shell::UpdateWindowRegion() {
   if (!island_window_) {
     return;
   }
-  RECT bounds{};
-  GetClientRect(island_window_, &bounds);
-  const UINT dpi = GetDpiForWindow(parent_);
-  const double scale = static_cast<double>(dpi) / 96.0;
-  const int tab_height = static_cast<int>(kTabRowHeight * scale + 0.5);
-  // AppWindowTitleBar owns the caption-button hover plate. Its actual height
-  // can exceed the nominal XAML row by a few physical pixels at fractional
-  // display scaling. Keep the island cut out for the complete native caption
-  // height so the plate can never be clipped by the toolbar surface.
-  const int native_caption_height = title_bar_ ? title_bar_.Height() : 0;
-  const int caption_cutout_height =
-      std::max(tab_height, native_caption_height);
-  const int caption_width = title_bar_
-                                ? title_bar_.RightInset()
-                                : GetSystemMetricsForDpi(SM_CXSIZE, dpi) * 3;
-  const int top_width =
-      std::max(0, static_cast<int>(bounds.right) - caption_width);
-  HRGN top = CreateRectRgn(0, 0, top_width, caption_cutout_height);
-  HRGN body =
-      CreateRectRgn(0, caption_cutout_height, bounds.right, bounds.bottom);
-  CombineRgn(top, top, body, RGN_OR);
-  DeleteObject(body);
-  SetWindowRgn(island_window_, top, TRUE);  // The system owns `top` now.
+  // The caption glyphs are now XAML visuals and their rectangles are native
+  // non-client regions, so the island can retain Mica across the full width.
+  // Removing the old cutout eliminates Chromium's opaque black/gray surface.
+  SetWindowRgn(island_window_, nullptr, TRUE);
 }
 
 void Shell::ApplySystemTheme() {
@@ -1327,6 +1606,10 @@ void Shell::ApplySystemTheme() {
     const DWM_SYSTEMBACKDROP_TYPE backdrop_type = DWMSBT_TABBEDWINDOW;
     DwmSetWindowAttribute(parent_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type,
                           sizeof(backdrop_type));
+    const UINT dpi = GetDpiForWindow(parent_);
+    const MARGINS frame_margins{
+        0, 0, static_cast<int>(kTabRowHeight * dpi / 96.0 + 0.5), 0};
+    DwmExtendFrameIntoClientArea(parent_, &frame_margins);
     if (title_bar_) {
       using winrt::Microsoft::UI::Windowing::TitleBarTheme;
       title_bar_.PreferredTheme(dark ? TitleBarTheme::Dark
@@ -1354,13 +1637,9 @@ void Shell::ApplySystemTheme() {
     // Sharing one brush instance also lets TabView's native lower arcs merge
     // into the toolbar instead of reading as a flat seam between two colors.
     const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
-    // Chromium's renderer paints beneath the toolbar but not beneath the
-    // custom title row. A translucent command brush therefore composites to
-    // two different colors even when both controls share the same resource.
-    // Use an opaque Windows 11 commanding surface over the Mica Alt base so
-    // the active tab and toolbar remain visually continuous.
-    const auto commanding_layer = SolidColorBrush{
-        dark ? Color(45, 45, 45) : Color(243, 243, 243)};
+    const auto commanding_layer = ThemeBrush(
+        L"LayerOnMicaBaseAltFillColorDefaultBrush",
+        dark ? Color(58, 58, 58, 115) : Color(255, 255, 255, 179));
     const auto content_layer = ThemeBrush(
         L"LayerFillColorDefaultBrush",
         dark ? Color(58, 58, 58, 76) : Color(255, 255, 255, 128));
@@ -1420,6 +1699,12 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
   switch (message) {
     case WM_SIZE:
     case WM_DPICHANGED:
+      // AppWindow and Chromium both adjust child HWND geometry while handling
+      // these messages. Resize the XAML island after that transaction instead
+      // of re-entering it from inside the native maximize/DPI path.
+      PostMessageW(window, kDeferredResizeMessage, 0, 0);
+      break;
+    case kDeferredResizeMessage:
       shell->ResizeIsland();
       break;
     case WM_SETTINGCHANGE:
@@ -1482,4 +1767,21 @@ extern "C" HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
     return E_INVALIDARG;
   }
   return static_cast<windows_chromium::Shell*>(shell)->Capture(output_path);
+}
+
+extern "C" int32_t __stdcall WcsShowContextMenu(
+    WcsShellHandle shell,
+    const WcsContextMenuItem* items,
+    size_t item_count,
+    int32_t screen_x,
+    int32_t screen_y) {
+  if (!shell) {
+    return -1;
+  }
+  try {
+    return static_cast<windows_chromium::Shell*>(shell)->ShowContextMenu(
+        items, item_count, screen_x, screen_y);
+  } catch (...) {
+    return -1;
+  }
 }
