@@ -185,7 +185,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941b6b8da4f
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,452 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -219,7 +219,7 @@ index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941
 +#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "content/public/browser/navigation_controller.h"
-+#include "content/public/browser/open_url_params.h"
++#include "content/public/browser/page_navigator.h"
 +#include "content/public/browser/reload_type.h"
 +#include "content/public/browser/web_contents.h"
 +#include "content/public/common/referrer.h"
@@ -231,12 +231,38 @@ index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941
 +namespace {
 +
 +constexpr wchar_t kShellDllName[] = L"curve_browser_shell.dll";
++constexpr wchar_t kWindowsAppRuntimeDllName[] =
++    L"Microsoft.WindowsAppRuntime.dll";
 +constexpr char kDisableShellSwitch[] = "disable-curve-browser-shell";
 +constexpr char kShellPathSwitch[] = "curve-browser-shell-path";
 +
 +template <typename Function>
 +Function ResolveExport(HMODULE module, const char* name) {
 +  return reinterpret_cast<Function>(GetProcAddress(module, name));
++}
++
++bool EnsureSelfContainedRuntimeLoaded(const base::FilePath& directory) {
++  static HMODULE runtime_module = nullptr;
++  if (runtime_module) {
++    return true;
++  }
++
++  const base::FilePath runtime_path =
++      directory.Append(kWindowsAppRuntimeDllName);
++  HMODULE module = LoadLibraryExW(runtime_path.value().c_str(), nullptr,
++                                  LOAD_WITH_ALTERED_SEARCH_PATH);
++  if (!module) {
++    return false;
++  }
++  using EnsureIsLoadedFn = HRESULT(STDAPICALLTYPE*)();
++  const auto ensure_is_loaded = ResolveExport<EnsureIsLoadedFn>(
++      module, "WindowsAppRuntime_EnsureIsLoaded");
++  if (!ensure_is_loaded || FAILED(ensure_is_loaded())) {
++    FreeLibrary(module);
++    return false;
++  }
++  runtime_module = module;
++  return true;
 +}
 +
 +uint32_t UserCloseTypes() {
@@ -269,6 +295,10 @@ index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941
 +      return false;
 +    }
 +    shell_path = executable_directory.Append(kShellDllName);
++  }
++
++  if (!EnsureSelfContainedRuntimeLoaded(shell_path.DirName())) {
++    return false;
 +  }
 +
 +  module_ = LoadLibraryExW(shell_path.value().c_str(), nullptr,
@@ -445,8 +475,7 @@ index 0000000000000000000000000000000000000000..89b5ebc72508063dd17f47a4b6f82941
 +  // keyword-mode behavior, security checks, and navigation metrics for input
 +  // submitted by the native WinUI TextBox.
 +  omnibox->SetUserText(base::WideToUTF16(text));
-+  omnibox->controller()->edit_model()->AcceptInput(
-+      WindowOpenDisposition::CURRENT_TAB);
++  ExecuteBrowserCommand(IDC_OPEN_CURRENT_URL);
 +}
 +
 +void CurveBrowserNativeShellHostWin::OpenInternalPage(const GURL& url) {

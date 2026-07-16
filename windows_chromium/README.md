@@ -67,7 +67,9 @@ Each shell build also writes
 manifest lists the self-contained DLL, PRI, XBF, and WinMD payload copied beside
 Chromium together with the WinUI assets, runtime helper, and localized MUI
 resources consumed by the Curve Browser portable packager. Preview-host
-artifacts, import libraries, and development symbols are excluded.
+artifacts, import libraries, and development symbols are excluded. The preview
+build also stages its executable resource index as `chrome.pri`; WinUI uses
+that executable-named PRI when the shell DLL is hosted inside Chromium.
 
 ## Compatibility boundary
 

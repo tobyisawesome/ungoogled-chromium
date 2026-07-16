@@ -47,8 +47,55 @@ constexpr double kToolbarHeight = 48.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
 
+void EnsureSelfContainedRuntimeLoaded();
+
+struct ModuleActivationContext {
+  ModuleActivationContext() {
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&kParentSubclassId), &module)) {
+      winrt::throw_last_error();
+    }
+
+    ACTCTXW context{};
+    context.cbSize = sizeof(context);
+    context.dwFlags =
+        ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    context.hModule = module;
+    context.lpResourceName = MAKEINTRESOURCEW(2);
+    handle = CreateActCtxW(&context);
+    if (handle == INVALID_HANDLE_VALUE) {
+      winrt::throw_last_error();
+    }
+    if (!ActivateActCtx(handle, &cookie)) {
+      const DWORD error = GetLastError();
+      ReleaseActCtx(handle);
+      handle = INVALID_HANDLE_VALUE;
+      winrt::throw_hresult(HRESULT_FROM_WIN32(error));
+    }
+  }
+
+  ~ModuleActivationContext() {
+    if (cookie) {
+      DeactivateActCtx(0, cookie);
+    }
+    if (handle != INVALID_HANDLE_VALUE) {
+      ReleaseActCtx(handle);
+    }
+  }
+
+  ModuleActivationContext(const ModuleActivationContext&) = delete;
+  ModuleActivationContext& operator=(const ModuleActivationContext&) = delete;
+
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  ULONG_PTR cookie = 0;
+};
+
 struct ThreadRuntime {
   ThreadRuntime() {
+    EnsureSelfContainedRuntimeLoaded();
     try {
       winrt::init_apartment(winrt::apartment_type::single_threaded);
     } catch (const winrt::hresult_error& error) {
@@ -77,6 +124,7 @@ struct ThreadRuntime {
     }
   }
 
+  ModuleActivationContext activation_context;
   winrt::Microsoft::UI::Dispatching::DispatcherQueueController dispatcher{
       nullptr};
   winrt::Windows::Foundation::IInspectable application{nullptr};
@@ -145,7 +193,6 @@ void EnsureSelfContainedRuntimeLoaded() {
 }
 
 void EnsureThreadRuntime() {
-  EnsureSelfContainedRuntimeLoaded();
   if (!g_thread_runtime) {
     g_thread_runtime = std::make_unique<ThreadRuntime>();
   }

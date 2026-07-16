@@ -52,5 +52,16 @@
     <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.2.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.2.1" />
   </ItemGroup>
+  <Target Name="StageCurveBrowserExecutablePri" AfterTargets="Build">
+    <Copy
+        SourceFiles="$(OutDir)$(TargetName).pri"
+        DestinationFiles="$(OutDir)chrome.pri"
+        SkipUnchangedFiles="true" />
+    <WriteLinesToFile
+        File="$(OutDir)curve_browser_payload_manifest.txt"
+        Lines="chrome.pri"
+        Overwrite="false"
+        Encoding="UTF-8" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
