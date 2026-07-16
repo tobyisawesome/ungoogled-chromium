@@ -367,6 +367,7 @@ index 0000000000..4afe757f1b
 +#include "base/functional/bind.h"
 +#include "base/location.h"
 +#include "base/path_service.h"
++#include "base/strings/escape.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "chrome/app/chrome_command_ids.h"
@@ -657,13 +658,22 @@ index 0000000000..4afe757f1b
 +  classifier->Classify(
 +      base::WideToUTF16(text), false, true,
 +      metrics::OmniboxEventProto::OTHER, &match, &alternate_nav_url);
-+  if (!match.destination_url.is_valid()) {
-+    return;
++  GURL destination_url = match.destination_url;
++  ui::PageTransition transition = match.transition;
++  if (!destination_url.is_valid()) {
++    // Ungoogled Chromium can start with no default search provider. Keep the
++    // native omnibox useful on that pristine profile while settings support is
++    // being initialized; once a provider exists the classifier result above
++    // remains authoritative.
++    destination_url = GURL("https://www.google.com/search?q=" +
++                           base::EscapeQueryParamValue(
++                               base::WideToUTF8(text), true));
++    transition = ui::PAGE_TRANSITION_GENERATED;
 +  }
 +
-+  content::OpenURLParams params(match.destination_url, content::Referrer(),
++  content::OpenURLParams params(destination_url, content::Referrer(),
 +                                WindowOpenDisposition::CURRENT_TAB,
-+                                match.transition, false);
++                                transition, false);
 +  browser_->OpenURL(params, {});
 +}
 +

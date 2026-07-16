@@ -47,7 +47,9 @@ constexpr double kTabRowHeight = 48.0;
 constexpr double kToolbarHeight = 48.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
-constexpr UINT kDeferredResizeMessage = WM_APP + 0x351;
+constexpr UINT_PTR kDeferredResizeTimerId = 0x57435332;  // "WCS2"
+constexpr UINT_PTR kIslandSubclassId = 0x57435333;  // "WCS3"
+constexpr UINT kDeferredResizeDelayMs = 50;
 
 winrt::Microsoft::UI::Xaml::DependencyObject FindNamedDescendant(
     const winrt::Microsoft::UI::Xaml::DependencyObject& root,
@@ -372,6 +374,17 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
       winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource{};
   xaml_source_.Initialize(
       winrt::Microsoft::UI::GetWindowIdFromWindow(parent_));
+  xaml_source_.GotFocus(
+      [](const winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource&
+             source,
+         const winrt::Microsoft::UI::Xaml::Hosting::
+             DesktopWindowXamlSourceGotFocusEventArgs& args) {
+        // DesktopWindowXamlSource notifies its Win32 host of pointer focus but
+        // does not automatically move keyboard focus into the XAML tree.
+        // Complete the request so typing targets the clicked WinUI control
+        // instead of Chromium's hidden Views omnibox.
+        source.NavigateFocus(args.Request());
+      });
   xaml_source_.Content(root_);
   winrt::Microsoft::UI::Xaml::Media::MicaBackdrop mica_alt;
   mica_alt.Kind(winrt::Microsoft::UI::Composition::SystemBackdrops::MicaKind::BaseAlt);
@@ -383,6 +396,9 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
   LONG_PTR style = GetWindowLongPtrW(island_window_, GWL_STYLE);
   SetWindowLongPtrW(island_window_, GWL_STYLE,
                     style | WS_CHILD | WS_VISIBLE | WS_TABSTOP);
+  winrt::check_bool(SetWindowSubclass(
+      island_window_, &Shell::IslandSubclassProc, kIslandSubclassId,
+      reinterpret_cast<DWORD_PTR>(this)) != FALSE);
   AttachWindowSubclass();
   ApplySystemTheme();
   ResizeIsland();
@@ -398,9 +414,14 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
 
 Shell::~Shell() {
   if (parent_ && IsWindow(parent_)) {
+    KillTimer(parent_, kDeferredResizeTimerId);
     RemovePropW(parent_, L"CurveBrowserNativeShellActive");
   }
   DetachWindowSubclass();
+  if (island_window_ && IsWindow(island_window_)) {
+    RemoveWindowSubclass(island_window_, &Shell::IslandSubclassProc,
+                         kIslandSubclassId);
+  }
   if (non_client_pointer_source_) {
     non_client_pointer_source_.ClearAllRegionRects();
   }
@@ -422,7 +443,7 @@ void Shell::ConfigureTitleBar() {
   const auto window_id = winrt::Microsoft::UI::GetWindowIdFromWindow(parent_);
   title_bar_ = AppWindow::GetFromWindowId(window_id).TitleBar();
   title_bar_.ExtendsContentIntoTitleBar(true);
-  title_bar_.PreferredHeightOption(TitleBarHeightOption::Tall);
+  title_bar_.PreferredHeightOption(TitleBarHeightOption::Standard);
   non_client_pointer_source_ =
       winrt::Microsoft::UI::Input::InputNonClientPointerSource::
           GetForWindowId(window_id);
@@ -483,8 +504,7 @@ void Shell::BuildVisualTree() {
   });
   tab_view_.SizeChanged(
       [this](const auto&, const auto&) {
-        UpdateTitleBarRegions();
-        UpdateTabShoulders();
+        ScheduleTabChromeUpdate();
       });
 
   tab_shoulder_layer_ = Canvas{};
@@ -519,10 +539,11 @@ void Shell::BuildVisualTree() {
   // item and never participate in hit testing.
   root_.Children().InsertAt(0, tab_shoulder_layer_);
 
-  // Draw the caption controls on the same transparent XAML/Mica surface as
-  // the tabs. Their rectangles are registered below as true Windows
-  // non-client regions, retaining snap layouts and native window commands
-  // without exposing Chromium's opaque frame beneath a cutout.
+  // AppWindow already owns the three caption buttons in its RightInset. Its
+  // stable Standard presenter preserves native snap layouts and commands. A
+  // non-interactive XAML overlay supplies the requested 48-DIP visual height;
+  // do not register duplicate input regions or enable the crash-prone Tall
+  // presenter on this unpackaged Chromium HWND.
   caption_host_ = Grid{};
   caption_host_.Width(caption_width);
   caption_host_.Height(kTabRowHeight);
@@ -584,6 +605,7 @@ void Shell::BuildVisualTree() {
 
   tab_view_.AddTabButtonClick([this](const TabView&, const auto&) {
     if (!updating_) {
+      address_editing_ = false;
       Invoke(WCS_COMMAND_NEW_TAB);
     }
   });
@@ -594,6 +616,7 @@ void Shell::BuildVisualTree() {
     }
     const auto selected = tab_view_.SelectedItem().try_as<TabViewItem>();
     if (selected && selected.Tag()) {
+      address_editing_ = false;
       Invoke(WCS_COMMAND_ACTIVATE_TAB,
              winrt::unbox_value<int64_t>(selected.Tag()));
     }
@@ -734,7 +757,14 @@ void Shell::BuildToolbar() {
       }
     });
   });
+  address_box_.GotFocus([this](const auto&, const auto&) {
+    address_editing_ = true;
+  });
+  address_box_.PointerPressed([this](const auto&, const auto&) {
+    address_editing_ = true;
+  });
   address_box_.LostFocus([this](const auto&, const auto&) {
+    address_editing_ = false;
     address_box_.IsSuggestionListOpen(false);
   });
   address_host.Children().Append(address_box_);
@@ -752,6 +782,7 @@ void Shell::BuildToolbar() {
           }
         }
         if (!value.empty()) {
+          address_editing_ = false;
           sender.IsSuggestionListOpen(false);
           sender.ItemsSource(nullptr);
           Invoke(WCS_COMMAND_NAVIGATE, active_tab_id_, active_index_,
@@ -773,6 +804,7 @@ void Shell::BuildToolbar() {
           return;
         }
         if (!updating_) {
+          address_editing_ = true;
           UpdateAddressSuggestions(sender.Text().c_str());
         }
       });
@@ -918,7 +950,7 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       item.IsClosable(true);
       item.Height(40);
       item.SizeChanged(
-          [this](const auto&, const auto&) { UpdateTabShoulders(); });
+          [this](const auto&, const auto&) { ScheduleTabChromeUpdate(); });
 
       MenuFlyout context_menu;
       context_menu.Items().Append(
@@ -961,41 +993,45 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
     winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
         item, winrt::hstring{title});
     item.IsClosable(tab.pinned == 0);
-    item.IconSource(nullptr);
-    if (tab.favicon_url && *tab.favicon_url) {
+    const bool was_audio_icon = tab_audio_icons_.contains(tab.tab_id);
+    const std::wstring reported_favicon_url =
+        tab.favicon_url && *tab.favicon_url ? tab.favicon_url : L"";
+    const auto cached_favicon = tab_favicon_urls_.find(tab.tab_id);
+    const std::wstring favicon_url =
+        !reported_favicon_url.empty()
+            ? reported_favicon_url
+            : (cached_favicon != tab_favicon_urls_.end()
+                   ? cached_favicon->second
+                   : L"");
+    const bool favicon_changed =
+        !reported_favicon_url.empty() &&
+        (cached_favicon == tab_favicon_urls_.end() ||
+         cached_favicon->second != reported_favicon_url);
+    if (!tab.audible && !favicon_url.empty() &&
+        (favicon_changed || was_audio_icon)) {
       try {
         winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap{
-            winrt::Windows::Foundation::Uri{tab.favicon_url}};
+            winrt::Windows::Foundation::Uri{favicon_url}};
         ImageIconSource source;
         source.ImageSource(bitmap);
         item.IconSource(source);
+        tab_favicon_urls_[tab.tab_id] = favicon_url;
       } catch (...) {
-        // Invalid or unsupported favicon URLs simply retain TabView's default
-        // no-icon layout.
+        // Preserve the last successfully decoded favicon. A transient empty or
+        // invalid URL during navigation must not collapse the icon presenter
+        // and make every size-to-content tab jitter.
       }
     }
-    if (tab.loading) {
-      StackPanel loading_header;
-      loading_header.Orientation(Orientation::Horizontal);
-      ProgressRing progress;
-      progress.Width(14);
-      progress.Height(14);
-      progress.Margin(Thickness{0, 0, 6, 0});
-      progress.IsActive(true);
-      TextBlock label;
-      label.Text(title);
-      loading_header.Children().Append(progress);
-      loading_header.Children().Append(label);
-      item.Header(loading_header);
-    } else if (tab.audible) {
-      item.Header(winrt::box_value(title));
+    item.Header(winrt::box_value(title));
+    if (tab.audible) {
       FontIconSource source;
       source.Glyph(tab.muted ? L"\uE74F" : L"\uE767");
       source.FontFamily(winrt::Microsoft::UI::Xaml::Media::FontFamily{
           L"Segoe Fluent Icons"});
       item.IconSource(source);
+      tab_audio_icons_.insert(tab.tab_id);
     } else {
-      item.Header(winrt::box_value(title));
+      tab_audio_icons_.erase(tab.tab_id);
     }
 
     if (const auto pin = tab_pin_menu_items_.find(tab.tab_id);
@@ -1009,7 +1045,7 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       active_tab_id_ = tab.tab_id;
       active_tab_loading_ = tab.loading != 0;
       active_url_ = tab.url ? tab.url : L"";
-      if (address_box_.Text() != active_url_) {
+      if (!address_editing_ && address_box_.Text() != active_url_) {
         suppress_address_suggestions_ = true;
         address_box_.Text(active_url_);
       }
@@ -1027,6 +1063,8 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       tab_view_.TabItems().RemoveAt(item_index);
     }
     tab_pin_menu_items_.erase(it->first);
+    tab_favicon_urls_.erase(it->first);
+    tab_audio_icons_.erase(it->first);
     it = tab_items_.erase(it);
   }
 
@@ -1040,12 +1078,11 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       reload_button_, winrt::hstring{reload_tooltip});
 
   UpdateNativePage(active_url_);
-  UpdateTitleBarRegions();
-  UpdateTabShoulders();
-  // Selection activates SelectedBackgroundPath through x:Load during the
-  // next layout pass. Re-apply after that pass so the realized WinUI template
-  // receives the shared command-layer material and exposes its shoulders.
-  root_.DispatcherQueue().TryEnqueue([this] { UpdateTabShoulders(); });
+  // Selection activates SelectedBackgroundPath through x:Load during the next
+  // layout pass. Coalesce the shoulder and non-client geometry work after that
+  // pass; changing either from a TabView SizeChanged callback can re-enter XAML
+  // measure and intermittently terminate the process.
+  ScheduleTabChromeUpdate();
 }
 
 void Shell::UpdateAddressSuggestions(std::wstring_view query) {
@@ -1100,6 +1137,65 @@ void Shell::UpdateAddressSecurityState(std::wstring_view url) {
       security_button_, label);
 }
 
+void Shell::ScheduleTabChromeUpdate() {
+  if (tab_chrome_update_queued_ || !root_) {
+    return;
+  }
+  tab_chrome_update_queued_ = true;
+  if (!root_.DispatcherQueue().TryEnqueue([this] {
+        tab_chrome_update_queued_ = false;
+        if (!parent_ || !IsWindow(parent_)) {
+          return;
+        }
+        try {
+          UpdateTitleBarRegions();
+          UpdateTabShoulders();
+        } catch (...) {
+          OutputDebugStringW(
+              L"Curve Browser deferred tab chrome update failed.\n");
+        }
+      })) {
+    tab_chrome_update_queued_ = false;
+  }
+}
+
+void Shell::UpdateCaptionButtonVisual(
+    winrt::Microsoft::UI::Input::NonClientRegionKind kind,
+    int state) {
+  using winrt::Microsoft::UI::Input::NonClientRegionKind;
+  ToolbarButton button{nullptr};
+  if (kind == NonClientRegionKind::Minimize) {
+    button = minimize_button_;
+  } else if (kind == NonClientRegionKind::Maximize) {
+    button = maximize_button_;
+  } else if (kind == NonClientRegionKind::Close) {
+    button = close_button_;
+  }
+  if (!button) {
+    return;
+  }
+
+  auto color = Color(0, 0, 0, 0);
+  if (state > 0 && kind == NonClientRegionKind::Close) {
+    color = state == 2 ? Color(162, 29, 17) : Color(196, 43, 28);
+  } else if (state == 2) {
+    color = Color(255, 255, 255, 32);
+  } else if (state == 1) {
+    color = Color(255, 255, 255, 20);
+  }
+  button.Background(SolidColorBrush{color});
+}
+
+void Shell::UpdateMaximizeGlyph() {
+  if (!maximize_button_) {
+    return;
+  }
+  maximize_button_.Content(Glyph(IsZoomed(parent_) ? L"\uE923" : L"\uE922",
+                                  10));
+  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+      maximize_button_, IsZoomed(parent_) ? L"Restore" : L"Maximize");
+}
+
 void Shell::UpdateTabShoulders() {
   if (!left_tab_shoulder_ || !right_tab_shoulder_ || !root_) {
     return;
@@ -1140,43 +1236,6 @@ void Shell::UpdateTabShoulders() {
     left_tab_shoulder_.Visibility(Visibility::Collapsed);
     right_tab_shoulder_.Visibility(Visibility::Collapsed);
   }
-}
-
-void Shell::UpdateCaptionButtonVisual(
-    winrt::Microsoft::UI::Input::NonClientRegionKind kind,
-    int state) {
-  using winrt::Microsoft::UI::Input::NonClientRegionKind;
-  ToolbarButton button{nullptr};
-  if (kind == NonClientRegionKind::Minimize) {
-    button = minimize_button_;
-  } else if (kind == NonClientRegionKind::Maximize) {
-    button = maximize_button_;
-  } else if (kind == NonClientRegionKind::Close) {
-    button = close_button_;
-  }
-  if (!button) {
-    return;
-  }
-
-  auto color = Color(0, 0, 0, 0);
-  if (state > 0 && kind == NonClientRegionKind::Close) {
-    color = state == 2 ? Color(162, 29, 17) : Color(196, 43, 28);
-  } else if (state == 2) {
-    color = Color(255, 255, 255, 32);
-  } else if (state == 1) {
-    color = Color(255, 255, 255, 20);
-  }
-  button.Background(SolidColorBrush{color});
-}
-
-void Shell::UpdateMaximizeGlyph() {
-  if (!maximize_button_) {
-    return;
-  }
-  maximize_button_.Content(Glyph(IsZoomed(parent_) ? L"\uE923" : L"\uE922",
-                                  10));
-  winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
-      maximize_button_, IsZoomed(parent_) ? L"Restore" : L"Maximize");
 }
 
 void Shell::UpdateTitleBarRegions() {
@@ -1228,29 +1287,6 @@ void Shell::UpdateTitleBarRegions() {
         rectangles);
   }
 
-  using winrt::Microsoft::UI::Input::NonClientRegionKind;
-  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Minimize);
-  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Maximize);
-  non_client_pointer_source_.ClearRegionRects(NonClientRegionKind::Close);
-  if (right_inset > 0) {
-    const int button_left = static_cast<int>(client.right) - right_inset;
-    const int first_width = right_inset / 3;
-    const int second_width = right_inset / 3;
-    const int third_width = right_inset - first_width - second_width;
-    const std::array minimize_rect = {winrt::Windows::Graphics::RectInt32{
-        button_left, 0, first_width, title_height}};
-    const std::array maximize_rect = {winrt::Windows::Graphics::RectInt32{
-        button_left + first_width, 0, second_width, title_height}};
-    const std::array close_rect = {winrt::Windows::Graphics::RectInt32{
-        button_left + first_width + second_width, 0, third_width,
-        title_height}};
-    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Minimize,
-                                               minimize_rect);
-    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Maximize,
-                                               maximize_rect);
-    non_client_pointer_source_.SetRegionRects(NonClientRegionKind::Close,
-                                               close_rect);
-  }
 }
 
 bool Shell::IsNativePage(std::wstring_view url) const {
@@ -1575,8 +1611,15 @@ void Shell::ResizeIsland() {
   const double scale = static_cast<double>(dpi) / 96.0;
   const int shell_height = static_cast<int>(kShellHeight * scale + 0.5);
   const int height = native_page_visible_ ? client.bottom : shell_height;
-  xaml_source_.SiteBridge().MoveAndResize(
-      winrt::Windows::Graphics::RectInt32{0, 0, client.right, height});
+  if (client.right <= 0 || height <= 0) {
+    return;
+  }
+  // Once DesktopWindowXamlSource has created its child HWND, normal window
+  // sizing is sufficient. SiteBridge::MoveAndResize during a maximize
+  // non-client transaction can asynchronously raise a fatal XAML stowed
+  // exception even when the synchronous call succeeds.
+  SetWindowPos(island_window_, HWND_TOP, 0, 0, client.right, height,
+               SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING);
   UpdateWindowRegion();
   UpdateTitleBarRegions();
   UpdateMaximizeGlyph();
@@ -1702,18 +1745,56 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
       // AppWindow and Chromium both adjust child HWND geometry while handling
       // these messages. Resize the XAML island after that transaction instead
       // of re-entering it from inside the native maximize/DPI path.
-      PostMessageW(window, kDeferredResizeMessage, 0, 0);
+      SetTimer(window, kDeferredResizeTimerId, kDeferredResizeDelayMs, nullptr);
       break;
-    case kDeferredResizeMessage:
-      shell->ResizeIsland();
+    case WM_TIMER:
+      if (wparam == kDeferredResizeTimerId) {
+        KillTimer(window, kDeferredResizeTimerId);
+        try {
+          shell->ResizeIsland();
+        } catch (...) {
+          // No C++/WinRT exception may escape a Win32 subclass callback. XAML
+          // reports such escapes as fatal stowed exceptions (0xc000027b).
+          OutputDebugStringW(L"Curve Browser deferred resize failed.\n");
+        }
+      }
       break;
     case WM_SETTINGCHANGE:
     case WM_THEMECHANGED:
       shell->ApplySystemTheme();
       break;
     case WM_NCDESTROY:
+      KillTimer(window, kDeferredResizeTimerId);
       RemoveWindowSubclass(window, &Shell::ParentSubclassProc, subclass_id);
       shell->parent_ = nullptr;
+      break;
+  }
+  return DefSubclassProc(window, message, wparam, lparam);
+}
+
+LRESULT CALLBACK Shell::IslandSubclassProc(HWND window,
+                                           UINT message,
+                                           WPARAM wparam,
+                                           LPARAM lparam,
+                                           UINT_PTR subclass_id,
+                                           DWORD_PTR reference_data) {
+  (void)reference_data;
+  switch (message) {
+    case WM_MOUSEACTIVATE: {
+      const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+      if (result != MA_NOACTIVATE && result != MA_NOACTIVATEANDEAT) {
+        SetFocus(window);
+      }
+      return result;
+    }
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_POINTERDOWN:
+      SetFocus(window);
+      break;
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(window, &Shell::IslandSubclassProc, subclass_id);
       break;
   }
   return DefSubclassProc(window, message, wparam, lparam);

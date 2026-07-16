@@ -6,6 +6,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,7 @@ class Shell final {
   void BuildToolbar();
   void BuildMenus();
   void ConfigureTitleBar();
+  void ScheduleTabChromeUpdate();
   void UpdateTitleBarRegions();
   ToolbarButton MakeGlyphButton(std::wstring_view glyph,
                                 std::wstring_view tooltip,
@@ -103,16 +105,24 @@ class Shell final {
                                               LPARAM lparam,
                                               UINT_PTR subclass_id,
                                               DWORD_PTR reference_data);
+  static LRESULT CALLBACK IslandSubclassProc(HWND window,
+                                              UINT message,
+                                              WPARAM wparam,
+                                              LPARAM lparam,
+                                              UINT_PTR subclass_id,
+                                              DWORD_PTR reference_data);
 
   HWND parent_ = nullptr;
   HWND island_window_ = nullptr;
   WcsHostCallbacks callbacks_{};
   bool visible_ = true;
   bool updating_ = false;
+  bool address_editing_ = false;
   bool suppress_address_suggestions_ = false;
   bool native_page_visible_ = false;
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
+  bool tab_chrome_update_queued_ = false;
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
   std::wstring active_url_;
@@ -144,6 +154,8 @@ class Shell final {
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;
+  std::map<int64_t, std::wstring> tab_favicon_urls_;
+  std::set<int64_t> tab_audio_icons_;
   std::vector<std::wstring> tab_suggestions_;
   std::map<int64_t, winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem>
       tab_pin_menu_items_;
