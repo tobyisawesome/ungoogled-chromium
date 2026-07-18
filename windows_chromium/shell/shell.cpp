@@ -1180,8 +1180,9 @@ void Shell::Invoke(WcsCommand command,
 HRESULT Shell::Update(const WcsWindowState& state) {
   try {
     restore_on_startup_ = state.restore_on_startup != 0;
-    UpdateTabs(state);
     UpdateBookmarks(state);
+    UpdateNativePageData(state);
+    UpdateTabs(state);
     back_button_.IsEnabled(state.can_go_back != 0);
     forward_button_.IsEnabled(state.can_go_forward != 0);
     profile_button_.Content(
@@ -1247,6 +1248,35 @@ void Shell::UpdateBookmarks(const WcsWindowState& state) {
   overflow.Click(
       [this](const auto&, const auto&) { Invoke(WCS_COMMAND_OPEN_BOOKMARKS); });
   bookmark_items_.Children().Append(overflow);
+}
+
+void Shell::UpdateNativePageData(const WcsWindowState& state) {
+  native_bookmarks_.clear();
+  native_bookmarks_.reserve(state.bookmark_library_count);
+  for (size_t index = 0; index < state.bookmark_library_count; ++index) {
+    const WcsBookmarkState& bookmark = state.bookmark_library[index];
+    if (bookmark.size < sizeof(WcsBookmarkState)) {
+      continue;
+    }
+    native_bookmarks_.push_back(
+        NativeBookmark{bookmark.title ? bookmark.title : L"",
+                       bookmark.url ? bookmark.url : L"",
+                       bookmark.is_folder != 0});
+  }
+
+  native_history_.clear();
+  native_history_.reserve(state.history_entry_count);
+  for (size_t index = 0; index < state.history_entry_count; ++index) {
+    const WcsHistoryEntryState& entry = state.history_entries[index];
+    if (entry.size < sizeof(WcsHistoryEntryState)) {
+      continue;
+    }
+    native_history_.push_back(
+        NativeHistoryEntry{entry.title ? entry.title : L"",
+                           entry.url ? entry.url : L"",
+                           entry.visit_time ? entry.visit_time : L""});
+  }
+  history_loading_ = state.history_loading != 0;
 }
 
 void Shell::UpdateTabs(const WcsWindowState& state) {
@@ -1708,9 +1738,12 @@ void Shell::UpdateNativePage(std::wstring_view url) {
   page_transitions.Append(
       winrt::Microsoft::UI::Xaml::Media::Animation::EntranceThemeTransition{});
   scroll.Transitions(page_transitions);
+  scroll.HorizontalContentAlignment(HorizontalAlignment::Center);
   StackPanel page;
-  page.MaxWidth(920);
-  page.HorizontalAlignment(HorizontalAlignment::Stretch);
+  const double available_width =
+      root_.ActualWidth() > 96 ? root_.ActualWidth() - 64 : 840;
+  page.Width(std::max(420.0, std::min(920.0, available_width)));
+  page.HorizontalAlignment(HorizontalAlignment::Center);
   page.Padding(Thickness{32, 24, 32, 48});
 
   TextBlock title;
@@ -1804,6 +1837,67 @@ void Shell::UpdateNativePage(std::wstring_view url) {
         L"Passwords and autofill",
         L"Manage locally stored passwords, addresses, and payment methods.",
         passwords));
+  } else if (StartsWithInsensitive(url, L"chrome://bookmarks")) {
+    if (native_bookmarks_.empty()) {
+      TextBlock empty;
+      empty.Text(L"Your bookmark library is empty.");
+      empty.FontSize(15);
+      empty.Opacity(0.78);
+      page.Children().Append(empty);
+    }
+    for (const auto& bookmark : native_bookmarks_) {
+      if (bookmark.is_folder) {
+        FontIcon folder;
+        folder.Glyph(L"\uE8B7");
+        folder.FontSize(18);
+        page.Children().Append(MakeSettingsCard(
+            bookmark.title.empty() ? L"Bookmark folder" : bookmark.title,
+            L"Folder", folder));
+        continue;
+      }
+      Button open;
+      open.Content(winrt::box_value(L"Open"));
+      const std::wstring destination = bookmark.url;
+      open.Click([this, destination](const auto&, const auto&) {
+        Invoke(WCS_COMMAND_OPEN_BOOKMARK, -1, -1, destination.c_str());
+      });
+      page.Children().Append(MakeSettingsCard(
+          bookmark.title.empty() ? bookmark.url : bookmark.title,
+          bookmark.url, open));
+    }
+  } else if (StartsWithInsensitive(url, L"chrome://history")) {
+    if (history_loading_) {
+      ProgressRing loading;
+      loading.IsActive(true);
+      loading.Width(28);
+      loading.Height(28);
+      loading.HorizontalAlignment(HorizontalAlignment::Left);
+      page.Children().Append(MakeSettingsCard(
+          L"Loading browsing history",
+          L"Reading recent visits from your local Chromium profile.",
+          loading));
+    } else if (native_history_.empty()) {
+      TextBlock empty;
+      empty.Text(L"No browsing history is stored in this profile.");
+      empty.FontSize(15);
+      empty.Opacity(0.78);
+      page.Children().Append(empty);
+    }
+    for (const auto& entry : native_history_) {
+      Button open;
+      open.Content(winrt::box_value(L"Open"));
+      const std::wstring destination = entry.url;
+      open.Click([this, destination](const auto&, const auto&) {
+        Invoke(WCS_COMMAND_OPEN_BOOKMARK, -1, -1, destination.c_str());
+      });
+      std::wstring detail = entry.url;
+      if (!entry.visit_time.empty()) {
+        detail += L"\n";
+        detail += entry.visit_time;
+      }
+      page.Children().Append(MakeSettingsCard(
+          entry.title.empty() ? entry.url : entry.title, detail, open));
+    }
   } else {
     TextBlock description;
     description.Text(L"This native Windows 11 surface is connected to the active Chromium tab. More data controls will appear here as their browser services finish loading.");

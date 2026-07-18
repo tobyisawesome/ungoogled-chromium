@@ -56,10 +56,28 @@ void PushState() {
       {sizeof(WcsBookmarkState), L"Curve Browser", L"https://example.com/", 0},
       {sizeof(WcsBookmarkState), L"Bookmarks", L"", 1},
   }};
+  const std::array<WcsBookmarkState, 4> bookmark_library{{
+      {sizeof(WcsBookmarkState), L"Bookmarks bar", L"", 1},
+      {sizeof(WcsBookmarkState), L"Curve Browser", L"https://example.com/", 0},
+      {sizeof(WcsBookmarkState), L"Windows App SDK",
+       L"https://learn.microsoft.com/windows/apps/windows-app-sdk/", 0},
+      {sizeof(WcsBookmarkState), L"Other bookmarks", L"", 1},
+  }};
+  const std::array<WcsHistoryEntryState, 3> history{{
+      {sizeof(WcsHistoryEntryState), L"Curve Browser",
+       L"https://curvebrowser.local/", L"Today, 10:32 AM"},
+      {sizeof(WcsHistoryEntryState), L"Windows App SDK documentation",
+       L"https://learn.microsoft.com/windows/apps/windows-app-sdk/",
+       L"Today, 10:18 AM"},
+      {sizeof(WcsHistoryEntryState), L"Example Domain",
+       L"https://example.com/", L"Yesterday, 8:42 PM"},
+  }};
   WcsWindowState state{sizeof(WcsWindowState), tabs.data(), tabs.size(),
                        g_active, 1, 0, 0, L"Local profile",
                        g_restore_on_startup ? 1 : 0, bookmarks.data(),
-                       bookmarks.size(), 1};
+                       bookmarks.size(), 1, bookmark_library.data(),
+                       bookmark_library.size(), history.data(), history.size(),
+                       0};
   if (g_update && g_shell) {
     g_update(g_shell, &state);
   }
@@ -93,6 +111,10 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
     PushState();
   } else if (args->command == WCS_COMMAND_SET_RESTORE_ON_STARTUP) {
     g_restore_on_startup = args->event_flags != 0;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_BOOKMARK && args->text) {
+    g_urls[g_active] = args->text;
+    g_titles[g_active] = args->text;
     PushState();
   }
 }
@@ -208,21 +230,29 @@ int wmain(int argc, wchar_t** argv) {
                   static_cast<unsigned int>(result));
     return result;
   }
-  if (argc > 2) {
+  const int option_index =
+      argc > 2 ? 2 : (argc > 1 && wcsncmp(argv[1], L"--", 2) == 0 ? 1 : -1);
+  if (option_index > 0) {
     g_active = 2;
-    if (_wcsicmp(argv[2], L"--profiles") == 0) {
+    if (_wcsicmp(argv[option_index], L"--profiles") == 0) {
       g_titles[g_active] = L"Profiles";
       g_urls[g_active] = L"chrome://settings/manageProfile";
-    } else if (_wcsicmp(argv[2], L"--about") == 0) {
+    } else if (_wcsicmp(argv[option_index], L"--about") == 0) {
       g_titles[g_active] = L"About Curve Browser";
       g_urls[g_active] = L"chrome://settings/help";
+    } else if (_wcsicmp(argv[option_index], L"--bookmarks") == 0) {
+      g_titles[g_active] = L"Bookmarks";
+      g_urls[g_active] = L"chrome://bookmarks/";
+    } else if (_wcsicmp(argv[option_index], L"--history") == 0) {
+      g_titles[g_active] = L"History";
+      g_urls[g_active] = L"chrome://history/";
     }
   }
   PushState();
 
   ShowWindow(window, SW_SHOWDEFAULT);
   UpdateWindow(window);
-  if (argc > 1) {
+  if (argc > 1 && wcsncmp(argv[1], L"--", 2) != 0) {
     g_capture_path = argv[1];
     const UINT_PTR timer = SetTimer(window, 1, 750, nullptr);
     std::fwprintf(stderr, L"WinUI capture timer: %llu\n",

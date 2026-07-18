@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 7u
+#define WCS_API_VERSION 8u
 
 typedef void* WcsShellHandle;
 
@@ -102,6 +102,13 @@ typedef struct WcsBookmarkState {
   int32_t is_folder;
 } WcsBookmarkState;
 
+typedef struct WcsHistoryEntryState {
+  uint32_t size;
+  const wchar_t* title;
+  const wchar_t* url;
+  const wchar_t* visit_time;
+} WcsHistoryEntryState;
+
 typedef struct WcsWindowState {
   uint32_t size;
   const WcsTabState* tabs;
@@ -115,6 +122,11 @@ typedef struct WcsWindowState {
   const WcsBookmarkState* bookmarks;
   size_t bookmark_count;
   int32_t bookmark_bar_visible;
+  const WcsBookmarkState* bookmark_library;
+  size_t bookmark_library_count;
+  const WcsHistoryEntryState* history_entries;
+  size_t history_entry_count;
+  int32_t history_loading;
 } WcsWindowState;
 
 typedef enum WcsContextMenuItemType {

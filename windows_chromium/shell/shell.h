@@ -87,6 +87,7 @@ class Shell final {
               uint32_t event_flags = 0) const;
   void UpdateTabs(const WcsWindowState& state);
   void UpdateBookmarks(const WcsWindowState& state);
+  void UpdateNativePageData(const WcsWindowState& state);
   void UpdateAddressSuggestions(std::wstring_view query);
   void UpdateAddressSecurityState(std::wstring_view url);
   void UpdateTabShoulders();
@@ -136,6 +137,20 @@ class Shell final {
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
   std::wstring active_url_;
+
+  struct NativeBookmark {
+    std::wstring title;
+    std::wstring url;
+    bool is_folder = false;
+  };
+  struct NativeHistoryEntry {
+    std::wstring title;
+    std::wstring url;
+    std::wstring visit_time;
+  };
+  std::vector<NativeBookmark> native_bookmarks_;
+  std::vector<NativeHistoryEntry> native_history_;
+  bool history_loading_ = false;
 
   winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{
       nullptr};

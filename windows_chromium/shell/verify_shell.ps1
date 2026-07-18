@@ -184,3 +184,44 @@ try {
     Stop-Process -Id $process.Id -Force
   }
 }
+
+$historyProcess = Start-Process -FilePath $preview -WorkingDirectory $output `
+  -ArgumentList '--history' -PassThru
+try {
+  $deadline = (Get-Date).AddSeconds(20)
+  do {
+    Start-Sleep -Milliseconds 250
+    $historyProcess.Refresh()
+  } while ($historyProcess.MainWindowHandle -eq 0 -and
+           -not $historyProcess.HasExited -and
+           (Get-Date) -lt $deadline)
+
+  if ($historyProcess.HasExited -or $historyProcess.MainWindowHandle -eq 0) {
+    throw 'Native history preview did not create a window.'
+  }
+
+  $historyRoot = [System.Windows.Automation.AutomationElement]::FromHandle(
+    [IntPtr]$historyProcess.MainWindowHandle)
+  if (-not (Find-DescendantByName -Root $historyRoot -Name 'Example Domain')) {
+    throw 'Native history data was not rendered.'
+  }
+  $open = Find-DescendantByName -Root $historyRoot -Name 'Open'
+  if (-not $open) {
+    throw 'Native history entry action is missing.'
+  }
+  $open.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 300
+  $address = Find-DescendantByName -Root $historyRoot `
+    -Name 'Search or enter an address'
+  $value = $address.GetCurrentPattern(
+    [System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  if ($value -ne 'https://curvebrowser.local/') {
+    throw 'Native history entry did not navigate through the host command API.'
+  }
+  Write-Output "Curve Browser native history verification passed (PID $($historyProcess.Id))."
+} finally {
+  if (-not $historyProcess.HasExited) {
+    Stop-Process -Id $historyProcess.Id -Force
+  }
+}

@@ -405,7 +405,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,595 @@
+@@ -0,0 +1,686 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -421,6 +421,7 @@ index 0000000000..4afe757f1b
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
 +#include "base/functional/bind.h"
++#include "base/i18n/time_formatting.h"
 +#include "base/location.h"
 +#include "base/path_service.h"
 +#include "base/strings/escape.h"
@@ -429,6 +430,7 @@ index 0000000000..4afe757f1b
 +#include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 +#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/prefs/session_startup_pref.h"
 +#include "chrome/browser/printing/print_view_manager_common.h"
 +#include "chrome/browser/profiles/profile.h"
@@ -447,6 +449,8 @@ index 0000000000..4afe757f1b
 +#include "components/bookmarks/common/bookmark_pref_names.h"
 +#include "components/find_in_page/find_tab_helper.h"
 +#include "components/find_in_page/find_types.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/history/core/browser/history_types.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "components/omnibox/browser/autocomplete_classifier.h"
 +#include "components/omnibox/browser/autocomplete_match.h"
@@ -502,6 +506,26 @@ index 0000000000..4afe757f1b
 +
 +uint32_t UserCloseTypes() {
 +  return CLOSE_USER_GESTURE | CLOSE_CREATE_HISTORICAL_TAB;
++}
++
++struct BookmarkEntry {
++  std::wstring title;
++  std::wstring url;
++  bool is_folder = false;
++};
++
++void AppendBookmarkNode(const bookmarks::BookmarkNode* node,
++                        std::vector<BookmarkEntry>* entries) {
++  if (!node || !entries) {
++    return;
++  }
++  entries->push_back(
++      BookmarkEntry{base::UTF16ToWide(node->GetTitle()),
++                    node->is_url() ? base::UTF8ToWide(node->url().spec()) : L"",
++                    node->is_folder()});
++  for (const auto& child : node->children()) {
++    AppendBookmarkNode(child.get(), entries);
++  }
 +}
 +
 +}  // namespace
@@ -634,6 +658,9 @@ index 0000000000..4afe757f1b
 +  }
 +
 +  content::WebContents* active_contents = model->GetActiveWebContents();
++  const GURL active_url =
++      active_contents ? active_contents->GetVisibleURL() : GURL();
++  MaybeQueryHistory(active_url);
 +  std::wstring profile_name =
 +      base::UTF8ToWide(browser_->profile()->GetProfileUserName());
 +  if (profile_name.empty()) {
@@ -644,6 +671,8 @@ index 0000000000..4afe757f1b
 +  std::vector<std::wstring> bookmark_titles;
 +  std::vector<std::wstring> bookmark_urls;
 +  std::vector<WcsBookmarkState> bookmarks;
++  std::vector<BookmarkEntry> bookmark_library_entries;
++  std::vector<WcsBookmarkState> bookmark_library;
 +  if (bookmarks::BookmarkModel* bookmark_model =
 +          BookmarkModelFactory::GetForBrowserContext(browser_->profile());
 +      bookmark_model && bookmark_model->loaded()) {
@@ -661,6 +690,22 @@ index 0000000000..4afe757f1b
 +                           bookmark_urls.back().c_str(),
 +                           child->is_folder()});
 +    }
++    for (const auto& child : bookmark_model->root_node()->children()) {
++      AppendBookmarkNode(child.get(), &bookmark_library_entries);
++    }
++    bookmark_library.reserve(bookmark_library_entries.size());
++    for (const auto& entry : bookmark_library_entries) {
++      bookmark_library.push_back(
++          WcsBookmarkState{sizeof(WcsBookmarkState), entry.title.c_str(),
++                           entry.url.c_str(), entry.is_folder});
++    }
++  }
++  std::vector<WcsHistoryEntryState> history_entries;
++  history_entries.reserve(history_entries_.size());
++  for (const auto& entry : history_entries_) {
++    history_entries.push_back(WcsHistoryEntryState{
++        sizeof(WcsHistoryEntryState), entry.title.c_str(), entry.url.c_str(),
++        entry.visit_time.c_str()});
 +  }
 +  // Mirror the state Chromium actually laid out. The legacy boolean pref can
 +  // remain true while the current visibility policy is "new tab only"; using
@@ -679,8 +724,54 @@ index 0000000000..4afe757f1b
 +      bookmarks.data(),
 +      bookmarks.size(),
 +      show_bookmark_bar,
++      bookmark_library.data(),
++      bookmark_library.size(),
++      history_entries.data(),
++      history_entries.size(),
++      history_query_loading_,
 +  };
 +  update_window_state_(shell_, &state);
++}
++
++void CurveBrowserNativeShellHostWin::MaybeQueryHistory(
++    const GURL& active_url) {
++  if (history_query_started_ || !active_url.SchemeIs("chrome") ||
++      active_url.host() != "history") {
++    return;
++  }
++  history_query_started_ = true;
++  history_query_loading_ = true;
++  history::HistoryService* service = HistoryServiceFactory::GetForProfile(
++      browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
++  if (!service) {
++    history_query_loading_ = false;
++    return;
++  }
++  history::QueryOptions options;
++  options.max_count = 50;
++  options.duplicate_policy = history::QueryOptions::REMOVE_DUPLICATES_PER_DAY;
++  service->QueryHistory(
++      std::u16string(), options,
++      base::BindOnce(
++          &CurveBrowserNativeShellHostWin::OnHistoryQueryComplete,
++          weak_ptr_factory_.GetWeakPtr()),
++      &history_task_tracker_);
++}
++
++void CurveBrowserNativeShellHostWin::OnHistoryQueryComplete(
++    history::QueryResults results) {
++  history_entries_.clear();
++  history_entries_.reserve(results.size());
++  for (const history::URLResult& result : results) {
++    history_entries_.push_back(
++        HistoryEntry{base::UTF16ToWide(result.title()),
++                     base::UTF8ToWide(result.url().spec()),
++                     base::UTF16ToWide(
++                         base::TimeFormatShortDateAndTime(
++                             result.visit_time()))});
++  }
++  history_query_loading_ = false;
++  SyncState();
 +}
 +
 +void CurveBrowserNativeShellHostWin::SetVisible(bool visible) {
@@ -1006,7 +1097,7 @@ new file mode 100644
 index 0000000000..c57df9a6bd
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,95 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1017,14 +1108,20 @@ index 0000000000..c57df9a6bd
 +#include <windows.h>
 +
 +#include <string>
++#include <vector>
 +
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
++#include "base/task/cancelable_task_tracker.h"
 +#include "chrome/browser/ui/views/frame/curve_browser_shell_api_win.h"
 +
 +class Browser;
 +class BrowserView;
 +class GURL;
++
++namespace history {
++class QueryResults;
++}
 +
 +// Owns the optional in-process WinUI 3 shell for one normal browser window.
 +// The DLL boundary intentionally contains no WinRT or WinUI types so Chromium
@@ -1069,7 +1166,15 @@ index 0000000000..c57df9a6bd
 +  void ExecuteBrowserCommand(int command_id);
 +  void NavigateFromOmnibox(const std::wstring& text);
 +  void OpenInternalPage(const GURL& url);
++  void MaybeQueryHistory(const GURL& active_url);
++  void OnHistoryQueryComplete(history::QueryResults results);
 +  void Unload();
++
++  struct HistoryEntry {
++    std::wstring title;
++    std::wstring url;
++    std::wstring visit_time;
++  };
 +
 +  raw_ptr<BrowserView> browser_view_;
 +  raw_ptr<Browser> browser_;
@@ -1080,6 +1185,10 @@ index 0000000000..c57df9a6bd
 +  SetVisibleFn set_visible_ = nullptr;
 +  ShowFindFn show_find_ = nullptr;
 +  ShowRestorePromptFn show_restore_prompt_ = nullptr;
++  std::vector<HistoryEntry> history_entries_;
++  base::CancelableTaskTracker history_task_tracker_;
++  bool history_query_started_ = false;
++  bool history_query_loading_ = false;
 +  base::WeakPtrFactory<CurveBrowserNativeShellHostWin> weak_ptr_factory_{this};
 +};
 +
@@ -1089,7 +1198,7 @@ new file mode 100644
 index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,148 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1104,7 +1213,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 7u
++#define WCS_API_VERSION 8u
 +
 +typedef void* WcsShellHandle;
 +
@@ -1192,6 +1301,13 @@ index 0000000000..d96c09a84e
 +  int32_t is_folder;
 +} WcsBookmarkState;
 +
++typedef struct WcsHistoryEntryState {
++  uint32_t size;
++  const wchar_t* title;
++  const wchar_t* url;
++  const wchar_t* visit_time;
++} WcsHistoryEntryState;
++
 +typedef struct WcsWindowState {
 +  uint32_t size;
 +  const WcsTabState* tabs;
@@ -1205,6 +1321,11 @@ index 0000000000..d96c09a84e
 +  const WcsBookmarkState* bookmarks;
 +  size_t bookmark_count;
 +  int32_t bookmark_bar_visible;
++  const WcsBookmarkState* bookmark_library;
++  size_t bookmark_library_count;
++  const WcsHistoryEntryState* history_entries;
++  size_t history_entry_count;
++  int32_t history_loading;
 +} WcsWindowState;
 +
 +typedef enum WcsContextMenuItemType {
