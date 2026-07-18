@@ -1947,6 +1947,12 @@ extern "C" void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible) {
   }
 }
 
+extern "C" void __stdcall WcsShowFind(WcsShellHandle shell) {
+  if (shell) {
+    static_cast<windows_chromium::Shell*>(shell)->ShowFindFlyout();
+  }
+}
+
 extern "C" HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
                                                const wchar_t* output_path) {
   if (!shell) {

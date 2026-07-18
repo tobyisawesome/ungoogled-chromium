@@ -51,6 +51,7 @@ class Shell final {
 
   HRESULT Update(const WcsWindowState& state);
   void SetVisible(bool visible);
+  void ShowFindFlyout();
   HRESULT Capture(const wchar_t* output_path);
   int32_t ShowContextMenu(const WcsContextMenuItem* items,
                           size_t item_count,
@@ -65,7 +66,6 @@ class Shell final {
   void BuildVisualTree();
   void BuildToolbar();
   void BuildMenus();
-  void ShowFindFlyout();
   void ConfigureTitleBar();
   void ScheduleTabChromeUpdate();
   void UpdateTitleBarRegions();

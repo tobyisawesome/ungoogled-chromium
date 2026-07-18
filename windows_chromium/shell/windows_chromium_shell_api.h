@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 4u
+#define WCS_API_VERSION 5u
 
 typedef void* WcsShellHandle;
 
@@ -136,6 +136,8 @@ WCS_EXPORT HRESULT __stdcall WcsUpdateWindowState(
     WcsShellHandle shell,
     const WcsWindowState* state);
 WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
+// Opens the native WinUI find-on-page flyout and focuses its query box.
+WCS_EXPORT void __stdcall WcsShowFind(WcsShellHandle shell);
 // Renders the live XAML visual tree to a PNG for visual regression testing.
 // The operation is asynchronous; callers may watch for the output file.
 WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,

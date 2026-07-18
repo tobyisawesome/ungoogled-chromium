@@ -240,6 +240,19 @@ index c5b196b2be..59b150f585 100644
    // When the active tab changes, elements in the omnibox can change, which
    // can change its preferred size. Re-lay-out the toolbar to reflect the
    // possible change.
+@@ -3865,6 +3917,12 @@ bool BrowserView::ExecuteWindowsCommand(int command_id) {
+     }
+   }
+ 
++  if (command_id == IDC_FIND && curve_browser_shell_ &&
++      curve_browser_shell_->is_active()) {
++    curve_browser_shell_->ShowFind();
++    return true;
++  }
++
+   return chrome::ExecuteCommand(browser_.get(), command_id);
+ }
+ 
 @@ -4012,6 +4064,9 @@ views::View* BrowserView::CreateMacOverlayView() {
  void BrowserView::OnWidgetDestroying(views::Widget* widget) {
    DCHECK(widget_observation_.IsObservingSource(widget));
@@ -308,6 +321,21 @@ index c5b196b2be..59b150f585 100644
    initialized_ = true;
  }
 
+@@ -5093,6 +5194,14 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+         this);
+   }
+ 
++#if BUILDFLAG(IS_WIN)
++  if (command_id == IDC_FIND && curve_browser_shell_ &&
++      curve_browser_shell_->is_active()) {
++    curve_browser_shell_->ShowFind();
++    return true;
++  }
++#endif
++
+   return chrome::ExecuteCommand(browser_.get(), command_id,
+                                 accelerator.time_stamp());
+ }
 diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
 index ef13f8f685..ed856447cb 100644
 --- a/chrome/browser/ui/views/frame/browser_view.h
@@ -349,7 +377,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,539 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -487,9 +515,10 @@ index 0000000000..4afe757f1b
 +  update_window_state_ =
 +      ResolveExport<UpdateWindowStateFn>(module_, "WcsUpdateWindowState");
 +  set_visible_ = ResolveExport<SetVisibleFn>(module_, "WcsSetVisible");
++  show_find_ = ResolveExport<ShowFindFn>(module_, "WcsShowFind");
 +  if (!get_api_version || get_api_version() != WCS_API_VERSION ||
 +      !create_shell || !destroy_shell_ || !update_window_state_ ||
-+      !set_visible_) {
++      !set_visible_ || !show_find_) {
 +    Unload();
 +    return false;
 +  }
@@ -519,6 +548,7 @@ index 0000000000..4afe757f1b
 +  destroy_shell_ = nullptr;
 +  update_window_state_ = nullptr;
 +  set_visible_ = nullptr;
++  show_find_ = nullptr;
 +  if (module_) {
 +    FreeLibrary(module_);
 +    module_ = nullptr;
@@ -590,6 +620,12 @@ index 0000000000..4afe757f1b
 +void CurveBrowserNativeShellHostWin::SetVisible(bool visible) {
 +  if (shell_ && set_visible_) {
 +    set_visible_(shell_, visible ? TRUE : FALSE);
++  }
++}
++
++void CurveBrowserNativeShellHostWin::ShowFind() {
++  if (shell_ && show_find_) {
++    show_find_(shell_);
 +  }
 +}
 +
@@ -886,7 +922,7 @@ new file mode 100644
 index 0000000000..c57df9a6bd
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,74 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -922,6 +958,7 @@ index 0000000000..c57df9a6bd
 +  bool is_active() const { return shell_ != nullptr; }
 +  void SyncState();
 +  void SetVisible(bool visible);
++  void ShowFind();
 +
 + private:
 +  using GetApiVersionFn = uint32_t(__stdcall*)();
@@ -932,6 +969,7 @@ index 0000000000..c57df9a6bd
 +  using UpdateWindowStateFn = HRESULT(__stdcall*)(WcsShellHandle,
 +                                                  const WcsWindowState*);
 +  using SetVisibleFn = void(__stdcall*)(WcsShellHandle, BOOL);
++  using ShowFindFn = void(__stdcall*)(WcsShellHandle);
 +
 +  static void __stdcall InvokeCommandThunk(void* context,
 +                                           const WcsCommandArgs* args);
@@ -954,6 +992,7 @@ index 0000000000..c57df9a6bd
 +  DestroyShellFn destroy_shell_ = nullptr;
 +  UpdateWindowStateFn update_window_state_ = nullptr;
 +  SetVisibleFn set_visible_ = nullptr;
++  ShowFindFn show_find_ = nullptr;
 +  base::WeakPtrFactory<CurveBrowserNativeShellHostWin> weak_ptr_factory_{this};
 +};
 +
@@ -978,7 +1017,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 4u
++#define WCS_API_VERSION 5u
 +
 +typedef void* WcsShellHandle;
 +
