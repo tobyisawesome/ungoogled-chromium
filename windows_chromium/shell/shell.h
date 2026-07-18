@@ -148,8 +148,18 @@ class Shell final {
     std::wstring url;
     std::wstring visit_time;
   };
+  struct NativeDownload {
+    uint32_t id = 0;
+    std::wstring title;
+    std::wstring url;
+    std::wstring target_path;
+    std::wstring status;
+    bool complete = false;
+    bool in_progress = false;
+  };
   std::vector<NativeBookmark> native_bookmarks_;
   std::vector<NativeHistoryEntry> native_history_;
+  std::vector<NativeDownload> native_downloads_;
   bool history_loading_ = false;
 
   winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{

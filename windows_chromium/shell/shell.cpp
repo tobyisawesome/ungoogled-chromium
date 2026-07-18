@@ -1277,6 +1277,23 @@ void Shell::UpdateNativePageData(const WcsWindowState& state) {
                            entry.visit_time ? entry.visit_time : L""});
   }
   history_loading_ = state.history_loading != 0;
+
+  native_downloads_.clear();
+  native_downloads_.reserve(state.download_count);
+  for (size_t index = 0; index < state.download_count; ++index) {
+    const WcsDownloadState& download = state.downloads[index];
+    if (download.size < sizeof(WcsDownloadState)) {
+      continue;
+    }
+    native_downloads_.push_back(
+        NativeDownload{download.id,
+                       download.title ? download.title : L"",
+                       download.url ? download.url : L"",
+                       download.target_path ? download.target_path : L"",
+                       download.status ? download.status : L"",
+                       download.complete != 0,
+                       download.in_progress != 0});
+  }
 }
 
 void Shell::UpdateTabs(const WcsWindowState& state) {
@@ -1837,6 +1854,64 @@ void Shell::UpdateNativePage(std::wstring_view url) {
         L"Passwords and autofill",
         L"Manage locally stored passwords, addresses, and payment methods.",
         passwords));
+  } else if (StartsWithInsensitive(url, L"chrome://downloads")) {
+    if (native_downloads_.empty()) {
+      TextBlock empty;
+      empty.Text(L"No downloads are stored in this profile.");
+      empty.FontSize(15);
+      empty.Opacity(0.78);
+      page.Children().Append(empty);
+    }
+    for (const auto& download : native_downloads_) {
+      StackPanel actions;
+      actions.Orientation(Orientation::Horizontal);
+      actions.Spacing(6);
+      if (download.in_progress) {
+        ProgressRing progress;
+        progress.IsActive(true);
+        progress.Width(24);
+        progress.Height(24);
+        progress.Margin(Thickness{4});
+        actions.Children().Append(progress);
+      }
+      if (download.complete) {
+        Button open;
+        open.Content(winrt::box_value(L"Open"));
+        const uint32_t id = download.id;
+        open.Click([this, id](const auto&, const auto&) {
+          Invoke(WCS_COMMAND_OPEN_DOWNLOAD, id);
+        });
+        actions.Children().Append(open);
+
+        Button show;
+        show.Content(ToolbarGlyph(L"\uE838"));
+        show.Width(32);
+        show.Height(32);
+        show.Padding(Thickness{0});
+        ToolTipService::SetToolTip(show, winrt::box_value(L"Show in folder"));
+        winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+            show, L"Show in folder");
+        show.Click([this, id](const auto&, const auto&) {
+          Invoke(WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER, id);
+        });
+        actions.Children().Append(show);
+      }
+      std::wstring detail = download.status;
+      if (!download.target_path.empty()) {
+        if (!detail.empty()) {
+          detail += L"\n";
+        }
+        detail += download.target_path;
+      } else if (!download.url.empty()) {
+        if (!detail.empty()) {
+          detail += L"\n";
+        }
+        detail += download.url;
+      }
+      page.Children().Append(MakeSettingsCard(
+          download.title.empty() ? L"Download" : download.title, detail,
+          actions));
+    }
   } else if (StartsWithInsensitive(url, L"chrome://bookmarks")) {
     if (native_bookmarks_.empty()) {
       TextBlock empty;

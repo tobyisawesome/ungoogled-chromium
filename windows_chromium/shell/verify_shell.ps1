@@ -45,6 +45,23 @@ function Find-DescendantByName {
     [System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
 
+function Find-DescendantByNamePrefix {
+  param(
+    [System.Windows.Automation.AutomationElement]$Root,
+    [string]$Prefix
+  )
+  $all = $Root.FindAll(
+    [System.Windows.Automation.TreeScope]::Descendants,
+    [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($element in $all) {
+    if ($element.Current.Name.StartsWith(
+        $Prefix, [System.StringComparison]::Ordinal)) {
+      return $element
+    }
+  }
+  return $null
+}
+
 function Get-SelectedTabName {
   param([System.Windows.Automation.AutomationElement]$Root)
   $condition = [System.Windows.Automation.PropertyCondition]::new(
@@ -223,5 +240,49 @@ try {
 } finally {
   if (-not $historyProcess.HasExited) {
     Stop-Process -Id $historyProcess.Id -Force
+  }
+}
+
+$downloadsProcess = Start-Process -FilePath $preview -WorkingDirectory $output `
+  -ArgumentList '--downloads' -PassThru
+try {
+  $deadline = (Get-Date).AddSeconds(20)
+  do {
+    Start-Sleep -Milliseconds 250
+    $downloadsProcess.Refresh()
+  } while ($downloadsProcess.MainWindowHandle -eq 0 -and
+           -not $downloadsProcess.HasExited -and
+           (Get-Date) -lt $deadline)
+
+  if ($downloadsProcess.HasExited -or
+      $downloadsProcess.MainWindowHandle -eq 0) {
+    throw 'Native downloads preview did not create a window.'
+  }
+
+  $downloadsRoot = [System.Windows.Automation.AutomationElement]::FromHandle(
+    [IntPtr]$downloadsProcess.MainWindowHandle)
+  if (-not (Find-DescendantByName -Root $downloadsRoot `
+      -Name 'CurveBrowserSetup.exe')) {
+    throw 'Native download-manager data was not rendered.'
+  }
+  if (-not (Find-DescendantByName -Root $downloadsRoot `
+      -Name 'Show in folder')) {
+    throw 'Native show-download-in-folder action is missing.'
+  }
+  $open = Find-DescendantByName -Root $downloadsRoot -Name 'Open'
+  if (-not $open) {
+    throw 'Native open-download action is missing.'
+  }
+  $open.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 300
+  if (-not (Find-DescendantByNamePrefix -Root $downloadsRoot `
+      -Prefix 'Open requested')) {
+    throw 'Native download action did not round-trip through the host API.'
+  }
+  Write-Output "Curve Browser native downloads verification passed (PID $($downloadsProcess.Id))."
+} finally {
+  if (-not $downloadsProcess.HasExited) {
+    Stop-Process -Id $downloadsProcess.Id -Force
   }
 }

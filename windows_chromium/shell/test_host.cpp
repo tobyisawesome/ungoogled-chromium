@@ -36,6 +36,7 @@ std::array<std::wstring, 3> g_urls = {
     L"chrome://settings/"};
 int g_active = 0;
 bool g_restore_on_startup = true;
+std::wstring g_download_action_status = L"Completed";
 
 void PushState() {
   std::array<WcsTabState, 3> tabs{};
@@ -72,12 +73,22 @@ void PushState() {
       {sizeof(WcsHistoryEntryState), L"Example Domain",
        L"https://example.com/", L"Yesterday, 8:42 PM"},
   }};
+  const std::array<WcsDownloadState, 2> downloads{{
+      {sizeof(WcsDownloadState), 101, L"CurveBrowserSetup.exe",
+       L"https://curvebrowser.local/downloads/CurveBrowserSetup.exe",
+       L"C:\\Users\\Owner\\Downloads\\CurveBrowserSetup.exe",
+       g_download_action_status.c_str(), 1, 0},
+      {sizeof(WcsDownloadState), 102, L"WindowsAppSDK.zip",
+       L"https://example.com/WindowsAppSDK.zip",
+       L"C:\\Users\\Owner\\Downloads\\WindowsAppSDK.zip",
+       L"Downloading \u00b7 62%", 0, 1},
+  }};
   WcsWindowState state{sizeof(WcsWindowState), tabs.data(), tabs.size(),
                        g_active, 1, 0, 0, L"Local profile",
                        g_restore_on_startup ? 1 : 0, bookmarks.data(),
                        bookmarks.size(), 1, bookmark_library.data(),
                        bookmark_library.size(), history.data(), history.size(),
-                       0};
+                       0, downloads.data(), downloads.size()};
   if (g_update && g_shell) {
     g_update(g_shell, &state);
   }
@@ -115,6 +126,12 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
   } else if (args->command == WCS_COMMAND_OPEN_BOOKMARK && args->text) {
     g_urls[g_active] = args->text;
     g_titles[g_active] = args->text;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_DOWNLOAD) {
+    g_download_action_status = L"Open requested";
+    PushState();
+  } else if (args->command == WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER) {
+    g_download_action_status = L"Folder requested";
     PushState();
   }
 }
@@ -246,6 +263,9 @@ int wmain(int argc, wchar_t** argv) {
     } else if (_wcsicmp(argv[option_index], L"--history") == 0) {
       g_titles[g_active] = L"History";
       g_urls[g_active] = L"chrome://history/";
+    } else if (_wcsicmp(argv[option_index], L"--downloads") == 0) {
+      g_titles[g_active] = L"Downloads";
+      g_urls[g_active] = L"chrome://downloads/";
     }
   }
   PushState();

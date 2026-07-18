@@ -405,7 +405,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,686 @@
+@@ -0,0 +1,761 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -447,6 +447,7 @@ index 0000000000..4afe757f1b
 +#include "components/bookmarks/browser/bookmark_model.h"
 +#include "components/bookmarks/browser/bookmark_node.h"
 +#include "components/bookmarks/common/bookmark_pref_names.h"
++#include "components/download/public/common/download_item.h"
 +#include "components/find_in_page/find_tab_helper.h"
 +#include "components/find_in_page/find_types.h"
 +#include "components/history/core/browser/history_service.h"
@@ -458,6 +459,7 @@ index 0000000000..4afe757f1b
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/favicon_status.h"
++#include "content/public/browser/download_manager.h"
 +#include "content/public/browser/page_navigator.h"
 +#include "content/public/browser/reload_type.h"
 +#include "content/public/browser/web_contents.h"
@@ -526,6 +528,30 @@ index 0000000000..4afe757f1b
 +  for (const auto& child : node->children()) {
 +    AppendBookmarkNode(child.get(), entries);
 +  }
++}
++
++std::wstring DownloadStatus(const download::DownloadItem* item) {
++  if (!item) {
++    return std::wstring();
++  }
++  switch (item->GetState()) {
++    case download::DownloadItem::IN_PROGRESS: {
++      if (item->IsPaused()) {
++        return L"Paused";
++      }
++      const int percent = item->PercentComplete();
++      return percent >= 0 ? L"Downloading \u00b7 " + std::to_wstring(percent) +
++                                L"%"
++                          : L"Downloading";
++    }
++    case download::DownloadItem::COMPLETE:
++      return L"Completed";
++    case download::DownloadItem::CANCELLED:
++      return L"Canceled";
++    case download::DownloadItem::INTERRUPTED:
++      return L"Interrupted";
++  }
++  return std::wstring();
 +}
 +
 +}  // namespace
@@ -707,6 +733,39 @@ index 0000000000..4afe757f1b
 +        sizeof(WcsHistoryEntryState), entry.title.c_str(), entry.url.c_str(),
 +        entry.visit_time.c_str()});
 +  }
++  std::vector<raw_ptr<download::DownloadItem, VectorExperimental>>
++      download_items;
++  std::vector<std::wstring> download_titles;
++  std::vector<std::wstring> download_urls;
++  std::vector<std::wstring> download_paths;
++  std::vector<std::wstring> download_statuses;
++  std::vector<WcsDownloadState> downloads;
++  if (content::DownloadManager* manager =
++          browser_->profile()->GetDownloadManager();
++      manager && manager->IsManagerInitialized()) {
++    manager->GetAllDownloads(&download_items);
++    download_titles.reserve(download_items.size());
++    download_urls.reserve(download_items.size());
++    download_paths.reserve(download_items.size());
++    download_statuses.reserve(download_items.size());
++    downloads.reserve(download_items.size());
++    for (const download::DownloadItem* item : download_items) {
++      if (!item) {
++        continue;
++      }
++      download_titles.push_back(
++          base::UTF16ToWide(item->GetFileNameToReportUser().LossyDisplayName()));
++      download_urls.push_back(base::UTF8ToWide(item->GetURL().spec()));
++      download_paths.push_back(item->GetTargetFilePath().value());
++      download_statuses.push_back(DownloadStatus(item));
++      downloads.push_back(WcsDownloadState{
++          sizeof(WcsDownloadState), item->GetId(),
++          download_titles.back().c_str(), download_urls.back().c_str(),
++          download_paths.back().c_str(), download_statuses.back().c_str(),
++          item->GetState() == download::DownloadItem::COMPLETE,
++          item->GetState() == download::DownloadItem::IN_PROGRESS});
++    }
++  }
 +  // Mirror the state Chromium actually laid out. The legacy boolean pref can
 +  // remain true while the current visibility policy is "new tab only"; using
 +  // it directly makes the native bar cover web content on ordinary pages.
@@ -729,6 +788,8 @@ index 0000000000..4afe757f1b
 +      history_entries.data(),
 +      history_entries.size(),
 +      history_query_loading_,
++      downloads.data(),
++      downloads.size(),
 +  };
 +  update_window_state_(shell_, &state);
 +}
@@ -1090,6 +1151,20 @@ index 0000000000..4afe757f1b
 +    case WCS_COMMAND_RESTORE_SESSION:
 +      SessionRestore::RestoreSessionAfterCrash(browser_);
 +      break;
++    case WCS_COMMAND_OPEN_DOWNLOAD:
++    case WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER:
++      if (content::DownloadManager* manager =
++              browser_->profile()->GetDownloadManager()) {
++        if (download::DownloadItem* item =
++                manager->GetDownload(static_cast<uint32_t>(tab_id))) {
++          if (command == WCS_COMMAND_OPEN_DOWNLOAD) {
++            item->OpenDownload();
++          } else {
++            item->ShowDownloadInShell();
++          }
++        }
++      }
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
@@ -1198,7 +1273,7 @@ new file mode 100644
 index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,163 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1213,7 +1288,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 8u
++#define WCS_API_VERSION 9u
 +
 +typedef void* WcsShellHandle;
 +
@@ -1259,6 +1334,8 @@ index 0000000000..d96c09a84e
 +  WCS_COMMAND_CLOSE_FIND = 48,
 +  WCS_COMMAND_OPEN_BOOKMARK = 49,
 +  WCS_COMMAND_RESTORE_SESSION = 50,
++  WCS_COMMAND_OPEN_DOWNLOAD = 51,
++  WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {
@@ -1308,6 +1385,17 @@ index 0000000000..d96c09a84e
 +  const wchar_t* visit_time;
 +} WcsHistoryEntryState;
 +
++typedef struct WcsDownloadState {
++  uint32_t size;
++  uint32_t id;
++  const wchar_t* title;
++  const wchar_t* url;
++  const wchar_t* target_path;
++  const wchar_t* status;
++  int32_t complete;
++  int32_t in_progress;
++} WcsDownloadState;
++
 +typedef struct WcsWindowState {
 +  uint32_t size;
 +  const WcsTabState* tabs;
@@ -1326,6 +1414,8 @@ index 0000000000..d96c09a84e
 +  const WcsHistoryEntryState* history_entries;
 +  size_t history_entry_count;
 +  int32_t history_loading;
++  const WcsDownloadState* downloads;
++  size_t download_count;
 +} WcsWindowState;
 +
 +typedef enum WcsContextMenuItemType {
