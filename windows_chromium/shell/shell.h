@@ -128,7 +128,6 @@ class Shell final {
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
   bool tab_chrome_update_queued_ = false;
-  bool sample_tab_material_ = false;
   bool new_tab_request_pending_ = false;
   bool island_hidden_for_window_transition_ = false;
   bool work_area_maximized_ = false;

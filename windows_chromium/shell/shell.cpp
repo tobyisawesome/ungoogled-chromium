@@ -51,12 +51,11 @@ constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr double kTabShoulderSize = 4.0;
 constexpr double kOmniboxButtonWidth = 30.0;
 constexpr double kOmniboxButtonHeight = 22.0;
+constexpr double kOmniboxButtonCornerRadius = 3.0;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
 constexpr UINT_PTR kDeferredResizeTimerId = 0x57435332;  // "WCS2"
 constexpr UINT_PTR kIslandSubclassId = 0x57435333;  // "WCS3"
-constexpr UINT_PTR kMaterialSampleTimerId = 0x57435334;  // "WCS4"
 constexpr UINT kDeferredResizeDelayMs = 200;
-constexpr UINT kMaterialSampleDelayMs = 350;
 
 winrt::Microsoft::UI::Xaml::DependencyObject FindNamedDescendant(
     const winrt::Microsoft::UI::Xaml::DependencyObject& root,
@@ -487,7 +486,6 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
 Shell::~Shell() {
   if (parent_ && IsWindow(parent_)) {
     KillTimer(parent_, kDeferredResizeTimerId);
-    KillTimer(parent_, kMaterialSampleTimerId);
     RemovePropW(parent_, L"CurveBrowserNativeShellActive");
   }
   DetachWindowSubclass();
@@ -912,6 +910,7 @@ void Shell::BuildToolbar() {
   security_button_.Content(OmniboxGlyph(L"\uE72E"));
   security_button_.Width(kOmniboxButtonWidth);
   security_button_.Height(kOmniboxButtonHeight);
+  security_button_.CornerRadius(CornerRadius{kOmniboxButtonCornerRadius});
   security_button_.HorizontalAlignment(HorizontalAlignment::Left);
   security_button_.Margin(Thickness{8, 0, 0, 0});
   address_host.Children().Append(security_button_);
@@ -921,6 +920,7 @@ void Shell::BuildToolbar() {
   favorite_button_.Content(OmniboxGlyph(L"\uE734"));
   favorite_button_.Width(kOmniboxButtonWidth);
   favorite_button_.Height(kOmniboxButtonHeight);
+  favorite_button_.CornerRadius(CornerRadius{kOmniboxButtonCornerRadius});
   favorite_button_.HorizontalAlignment(HorizontalAlignment::Right);
   favorite_button_.Margin(Thickness{0, 0, 8, 0});
   address_host.Children().Append(favorite_button_);
@@ -1311,13 +1311,10 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
     // and let the two 4 px connector paths provide the visible shoulders.
     const auto selected_background_key = winrt::box_value(
         winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
-    const auto body_background_key = winrt::box_value(
-        winrt::hstring{L"TabViewItemHeaderBackground"});
     const auto drag_background_key = winrt::box_value(
         winrt::hstring{L"TabViewItemHeaderDragBackground"});
     const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
     item.Resources().Insert(selected_background_key, transparent);
-    item.Resources().Insert(body_background_key, selected_tab_fill_);
     item.Resources().Insert(drag_background_key, toolbar_.Background());
 
     const wchar_t* title = tab.title && *tab.title ? tab.title : L"New tab";
@@ -1503,55 +1500,20 @@ void Shell::UpdateTabShoulders() {
       return;
     }
 
-    // WM_ACTIVATE starts a short timer so DWM and the XAML island have painted
-    // before this sample runs. Resolve the actual command-layer pixel only
-    // after that delay; sampling synchronously during activation can read the
-    // desktop behind the not-yet-presented island.
-    if (sample_tab_material_ && GetForegroundWindow() == parent_) {
-      sample_tab_material_ = false;
-      RECT client{};
-      GetClientRect(parent_, &client);
-      POINT sample{
-          bookmark_bar_visible_
-              ? std::max(0, static_cast<int>(client.right) / 2)
-              : 4,
-          static_cast<LONG>(
-              bookmark_bar_visible_
-                  ? kShellHeight + kBookmarkBarHeight / 2
-                  : kTabRowHeight + kToolbarHeight / 2)};
-      if (ClientToScreen(parent_, &sample)) {
-        if (HDC screen = GetDC(nullptr)) {
-          const COLORREF pixel = GetPixel(screen, sample.x, sample.y);
-          ReleaseDC(nullptr, screen);
-          if (pixel != CLR_INVALID) {
-            const BYTE red = GetRValue(pixel);
-            const BYTE green = GetGValue(pixel);
-            const BYTE blue = GetBValue(pixel);
-            const BYTE brightest = std::max({red, green, blue});
-            const BYTE darkest = std::min({red, green, blue});
-            // Mica can carry a subtle wallpaper tint, but the neutral
-            // commanding layer keeps its channels close together. A larger
-            // spread means DirectComposition has not presented yet and
-            // GetPixel saw the desktop behind the child island (the preview
-            // host deliberately uses a red desktop to catch this race).
-            if (brightest - darkest <= 48) {
-              selected_tab_fill_ =
-                  SolidColorBrush{Color(red, green, blue)};
-            }
-          }
-        }
-      }
-    }
     if (!selected_tab_fill_) {
       return;
     }
     const auto selected_key =
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
-    const auto body_key =
-        winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackground"});
     const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
+    for (const auto& [tab_id, item] : tab_items_) {
+      (void)tab_id;
+      if (const auto item_container =
+              FindVisualChildByName(item, L"TabContainer").try_as<Grid>()) {
+        item_container.Background(transparent);
+      }
+    }
     selected.Resources().Insert(selected_key, transparent);
-    selected.Resources().Insert(body_key, selected_tab_fill_);
     if (const auto selected_background =
             FindVisualChildByName(selected, L"SelectedBackgroundPath")
                 .try_as<winrt::Microsoft::UI::Xaml::Shapes::Shape>()) {
@@ -1582,7 +1544,7 @@ void Shell::UpdateTabShoulders() {
     Canvas::SetTop(left_tab_shoulder_,
                    kTabRowHeight - kTabShoulderSize);
     Canvas::SetLeft(right_tab_shoulder_,
-                    origin.X + tab_container.ActualWidth() - 1);
+                    origin.X + tab_container.ActualWidth());
     Canvas::SetTop(right_tab_shoulder_,
                    kTabRowHeight - kTabShoulderSize);
     left_tab_shoulder_.Visibility(Visibility::Visible);
@@ -2157,8 +2119,10 @@ void Shell::ApplySystemTheme() {
     const auto content_layer = ThemeBrush(
         L"LayerFillColorDefaultBrush",
         dark ? Color(58, 58, 58, 76) : Color(255, 255, 255, 128));
-    selected_tab_fill_ = SolidColorBrush{
-        dark ? Color(57, 57, 57) : Color(249, 249, 249)};
+    // Reuse the exact same brush instance for the toolbar, selected tab body,
+    // and connector paths. This keeps all three surfaces on one Fluent
+    // commanding material rather than approximating Mica with a sampled solid.
+    selected_tab_fill_ = commanding_layer;
 
     root_.Background(transparent);
     tab_view_.Background(transparent);
@@ -2188,6 +2152,7 @@ void Shell::ApplySystemTheme() {
     tab_view_.Resources().Insert(selected_key, transparent);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
     tab_view_.Resources().Insert(border_key, transparent);
+    ScheduleTabChromeUpdate();
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }
@@ -2214,12 +2179,6 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
                                            DWORD_PTR reference_data) {
   auto* shell = reinterpret_cast<Shell*>(reference_data);
   switch (message) {
-    case WM_ACTIVATE:
-      if (LOWORD(wparam) != WA_INACTIVE) {
-        SetTimer(window, kMaterialSampleTimerId, kMaterialSampleDelayMs,
-                 nullptr);
-      }
-      break;
     case WM_SYSCOMMAND:
       if ((wparam & 0xFFF0) == SC_MAXIMIZE ||
           ((wparam & 0xFFF0) == SC_RESTORE &&
@@ -2246,12 +2205,6 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
       SetTimer(window, kDeferredResizeTimerId, kDeferredResizeDelayMs, nullptr);
       break;
     case WM_TIMER:
-      if (wparam == kMaterialSampleTimerId) {
-        KillTimer(window, kMaterialSampleTimerId);
-        shell->sample_tab_material_ = true;
-        shell->ScheduleTabChromeUpdate();
-        break;
-      }
       if (wparam == kDeferredResizeTimerId) {
         KillTimer(window, kDeferredResizeTimerId);
         try {
@@ -2274,7 +2227,6 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
       break;
     case WM_NCDESTROY:
       KillTimer(window, kDeferredResizeTimerId);
-      KillTimer(window, kMaterialSampleTimerId);
       RemoveWindowSubclass(window, &Shell::ParentSubclassProc, subclass_id);
       shell->parent_ = nullptr;
       break;

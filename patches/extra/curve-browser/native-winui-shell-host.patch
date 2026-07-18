@@ -296,7 +296,7 @@ index c5b196b2be..59b150f585 100644
    if (!GetIsNormalType()) {
      return;
    }
-@@ -5003,6 +5066,38 @@ void BrowserView::AddedToWidget() {
+@@ -5003,6 +5066,40 @@ void BrowserView::AddedToWidget() {
    dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
        kBrowserDialogAnchorElementId, *this);
 
@@ -319,8 +319,10 @@ index c5b196b2be..59b150f585 100644
 +    toolbar_->layer()->SetOpacity(0.0f);
 +    toolbar_->SetCanProcessEventsWithinSubtree(false);
 +    if (bookmark_bar_view_) {
-+      bookmark_bar_view_->SetBookmarkBarState(
-+          BookmarkBar::HIDDEN, BookmarkBar::DONT_ANIMATE_STATE_CHANGE);
++      bookmark_bar_view_->SetPreferredSize(gfx::Size(0, 36));
++      bookmark_bar_view_->SetPaintToLayer();
++      bookmark_bar_view_->layer()->SetOpacity(0.0f);
++      bookmark_bar_view_->SetCanProcessEventsWithinSubtree(false);
 +    }
 +    if (auto* native_frame_view =
 +            views::AsViewClass<BrowserFrameViewWin>(GetFrameView())) {
@@ -403,7 +405,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,595 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -660,9 +662,10 @@ index 0000000000..4afe757f1b
 +                           child->is_folder()});
 +    }
 +  }
-+  const bool show_bookmark_bar =
-+      browser_->profile()->GetPrefs()->GetBoolean(
-+          bookmarks::prefs::kShowBookmarkBar);
++  // Mirror the state Chromium actually laid out. The legacy boolean pref can
++  // remain true while the current visibility policy is "new tab only"; using
++  // it directly makes the native bar cover web content on ordinary pages.
++  const bool show_bookmark_bar = browser_view_->IsBookmarkBarVisible();
 +  const WcsWindowState state{
 +      sizeof(WcsWindowState),
 +      tabs.data(),
