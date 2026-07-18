@@ -49,11 +49,14 @@ constexpr double kBookmarkBarHeight = 36.0;
 constexpr double kSidebarWidth = 320.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
 constexpr double kTabShoulderSize = 4.0;
-constexpr double kOmniboxButtonSize = 20.0;
+constexpr double kOmniboxButtonWidth = 30.0;
+constexpr double kOmniboxButtonHeight = 22.0;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
 constexpr UINT_PTR kDeferredResizeTimerId = 0x57435332;  // "WCS2"
 constexpr UINT_PTR kIslandSubclassId = 0x57435333;  // "WCS3"
+constexpr UINT_PTR kMaterialSampleTimerId = 0x57435334;  // "WCS4"
 constexpr UINT kDeferredResizeDelayMs = 200;
+constexpr UINT kMaterialSampleDelayMs = 350;
 
 winrt::Microsoft::UI::Xaml::DependencyObject FindNamedDescendant(
     const winrt::Microsoft::UI::Xaml::DependencyObject& root,
@@ -248,6 +251,42 @@ winrt::Windows::UI::Color Color(uint8_t red,
   return winrt::Windows::UI::Color{alpha, red, green, blue};
 }
 
+winrt::Microsoft::UI::Xaml::Media::PathGeometry TabShoulderGeometry(
+    bool left) {
+  using winrt::Microsoft::UI::Xaml::Media::BezierSegment;
+  using winrt::Microsoft::UI::Xaml::Media::LineSegment;
+  using winrt::Microsoft::UI::Xaml::Media::PathFigure;
+  using winrt::Microsoft::UI::Xaml::Media::PathGeometry;
+  using winrt::Windows::Foundation::Point;
+
+  PathGeometry geometry;
+  PathFigure figure;
+  figure.StartPoint(left ? Point{4, 0} : Point{0, 0});
+
+  LineSegment vertical;
+  vertical.Point(left ? Point{4, 4} : Point{0, 4});
+  figure.Segments().Append(vertical);
+
+  LineSegment foot;
+  foot.Point(left ? Point{0, 4} : Point{4, 4});
+  figure.Segments().Append(foot);
+
+  BezierSegment curve;
+  if (left) {
+    curve.Point1(Point{2.21f, 4});
+    curve.Point2(Point{4, 2.21f});
+    curve.Point3(Point{4, 0});
+  } else {
+    curve.Point1(Point{1.79f, 4});
+    curve.Point2(Point{0, 2.21f});
+    curve.Point3(Point{0, 0});
+  }
+  figure.Segments().Append(curve);
+  figure.IsClosed(true);
+  geometry.Figures().Append(figure);
+  return geometry;
+}
+
 FontIcon Glyph(std::wstring_view glyph, double size = 16.0) {
   FontIcon icon;
   icon.FontFamily(winrt::Microsoft::UI::Xaml::Media::FontFamily{
@@ -258,10 +297,14 @@ FontIcon Glyph(std::wstring_view glyph, double size = 16.0) {
 }
 
 FontIcon ToolbarGlyph(std::wstring_view glyph) {
-  // Let WinUI center the glyph inside the 32 px pointer-state surface. A
+  // Let WinUI center the glyph inside the compact pointer-state surface. A
   // manual baseline shift moves the ink away from the Button's actual center
   // and makes the hover shape appear offset even when its bounds are correct.
-  return Glyph(glyph, 16.0);
+  return Glyph(glyph, 14.0);
+}
+
+FontIcon OmniboxGlyph(std::wstring_view glyph) {
+  return Glyph(glyph, 12.0);
 }
 
 Brush ThemeBrush(std::wstring_view key,
@@ -277,28 +320,6 @@ Brush ThemeBrush(std::wstring_view key,
   } catch (...) {
   }
   return SolidColorBrush{fallback};
-}
-
-winrt::Microsoft::UI::Xaml::Media::Geometry TabShoulderGeometry(bool left) {
-  using namespace winrt::Microsoft::UI::Xaml::Media;
-  using winrt::Windows::Foundation::Point;
-
-  PathGeometry geometry;
-  PathFigure figure;
-  figure.StartPoint(left ? Point{4, 0} : Point{0, 0});
-  figure.IsClosed(true);
-
-  BezierSegment curve;
-  curve.Point1(left ? Point{4, 2.2f} : Point{0, 2.2f});
-  curve.Point2(left ? Point{2.2f, 4} : Point{1.8f, 4});
-  curve.Point3(left ? Point{0, 4} : Point{4, 4});
-  figure.Segments().Append(curve);
-
-  LineSegment bottom;
-  bottom.Point(left ? Point{4, 4} : Point{0, 4});
-  figure.Segments().Append(bottom);
-  geometry.Figures().Append(figure);
-  return geometry.as<Geometry>();
 }
 
 std::wstring StripMenuMnemonics(const wchar_t* source) {
@@ -466,6 +487,7 @@ Shell::Shell(HWND parent, const WcsHostCallbacks& callbacks)
 Shell::~Shell() {
   if (parent_ && IsWindow(parent_)) {
     KillTimer(parent_, kDeferredResizeTimerId);
+    KillTimer(parent_, kMaterialSampleTimerId);
     RemovePropW(parent_, L"CurveBrowserNativeShellActive");
   }
   DetachWindowSubclass();
@@ -570,22 +592,22 @@ void Shell::BuildVisualTree() {
         ScheduleTabChromeUpdate();
       });
 
+  // WinUI's stock TabGeometry is clipped to a straight item boundary in a
+  // DesktopWindowXamlSource. Draw only the two 4 px lower connectors above
+  // the tab row; the selected body remains the native TabContainer. These
+  // paths share one opaque material sample with the body, so the antialiased
+  // curve cannot double-composite into a lighter shoulder.
   tab_shoulder_layer_ = Canvas{};
   tab_shoulder_layer_.IsHitTestVisible(false);
   tab_shoulder_layer_.HorizontalAlignment(HorizontalAlignment::Stretch);
   tab_shoulder_layer_.VerticalAlignment(VerticalAlignment::Stretch);
   Grid::SetRow(tab_shoulder_layer_, 0);
   Grid::SetColumnSpan(tab_shoulder_layer_, 2);
-  // The TabView template paints an opaque header background even when the
-  // control Background is transparent. Keep the connector above that template;
-  // its paths live strictly outside the selected item and do not cover content.
   Canvas::SetZIndex(tab_shoulder_layer_, 3);
 
   left_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
   left_tab_shoulder_.Width(kTabShoulderSize);
   left_tab_shoulder_.Height(kTabShoulderSize);
-  left_tab_shoulder_.Stretch(
-      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
   left_tab_shoulder_.Data(TabShoulderGeometry(true));
   left_tab_shoulder_.Visibility(Visibility::Collapsed);
   tab_shoulder_layer_.Children().Append(left_tab_shoulder_);
@@ -593,12 +615,10 @@ void Shell::BuildVisualTree() {
   right_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
   right_tab_shoulder_.Width(kTabShoulderSize);
   right_tab_shoulder_.Height(kTabShoulderSize);
-  right_tab_shoulder_.Stretch(
-      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
   right_tab_shoulder_.Data(TabShoulderGeometry(false));
   right_tab_shoulder_.Visibility(Visibility::Collapsed);
   tab_shoulder_layer_.Children().Append(right_tab_shoulder_);
-  root_.Children().InsertAt(0, tab_shoulder_layer_);
+  root_.Children().Append(tab_shoulder_layer_);
 
   // AppWindow still reserves its native RightInset, but those controls are
   // visually transparent and this single WinUI layer owns input. This avoids
@@ -710,6 +730,13 @@ void Shell::BuildVisualTree() {
   bookmark_items_.Spacing(2);
   bookmark_scroll.Content(bookmark_items_);
   bookmark_bar_.Children().Append(bookmark_scroll);
+  bookmark_divider_ = Border{};
+  bookmark_divider_.Height(1);
+  bookmark_divider_.HorizontalAlignment(HorizontalAlignment::Stretch);
+  bookmark_divider_.VerticalAlignment(VerticalAlignment::Bottom);
+  bookmark_divider_.IsHitTestVisible(false);
+  Canvas::SetZIndex(bookmark_divider_, 20);
+  bookmark_bar_.Children().Append(bookmark_divider_);
   root_.Children().Append(bookmark_bar_);
 
   native_page_host_ = Grid{};
@@ -725,12 +752,11 @@ Shell::ToolbarButton Shell::MakeGlyphButton(std::wstring_view glyph,
                                             bool invoke_on_click) {
   Button button;
   button.Content(ToolbarGlyph(glyph));
-  // A native Button with an icon-only surface is the WinUI pattern that
-  // matches Explorer's standalone toolbar controls. Its 32 px state shape
-  // aligns exactly with the TextBox; the surrounding 40 px grid cell retains
-  // the comfortable command spacing without inheriting CommandBar geometry.
-  button.Width(32);
-  button.Height(32);
+  // AutoSuggestBox uses a compact inset pointer-state plate rather than
+  // filling its 32 px text-control row. Match that visual rhythm while the
+  // surrounding 40 px grid cell retains a comfortable click spacing.
+  button.Width(30);
+  button.Height(24);
   button.HorizontalAlignment(HorizontalAlignment::Center);
   button.VerticalAlignment(VerticalAlignment::Center);
   button.Padding(Thickness{0});
@@ -738,6 +764,7 @@ Shell::ToolbarButton Shell::MakeGlyphButton(std::wstring_view glyph,
   button.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush{
       Color(0, 0, 0, 0)});
   button.BorderThickness(Thickness{0});
+  button.CornerRadius(CornerRadius{4});
   ToolTipService::SetToolTip(button, winrt::box_value(tooltip));
   winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
       button, winrt::hstring{tooltip});
@@ -766,15 +793,6 @@ void Shell::BuildToolbar() {
   Grid::SetRow(toolbar_, 1);
   Grid::SetColumnSpan(toolbar_, 2);
   root_.Children().Append(toolbar_);
-
-  toolbar_divider_ = Border{};
-  toolbar_divider_.Height(1);
-  toolbar_divider_.HorizontalAlignment(HorizontalAlignment::Stretch);
-  toolbar_divider_.VerticalAlignment(VerticalAlignment::Bottom);
-  toolbar_divider_.IsHitTestVisible(false);
-  Canvas::SetZIndex(toolbar_divider_, 20);
-  Grid::SetColumnSpan(toolbar_divider_, 6);
-  toolbar_.Children().Append(toolbar_divider_);
 
   const double button_width = 40;
   for (int i = 0; i < 3; ++i) {
@@ -815,7 +833,7 @@ void Shell::BuildToolbar() {
   address_box_.PlaceholderText(L"Search or enter an address");
   address_box_.Height(32);
   address_box_.Margin(Thickness{4, 0, 8, 0});
-  address_box_.Padding(Thickness{32, 5, 32, 6});
+  address_box_.Padding(Thickness{46, 5, 46, 6});
   address_box_.QueryIcon(nullptr);
   address_box_.Loaded([this](const auto&, const auto&) {
     address_box_.ApplyTemplate();
@@ -823,13 +841,13 @@ void Shell::BuildToolbar() {
       if (const auto content =
               FindNamedDescendant(address_box_, L"ContentElement")
                   .try_as<ScrollViewer>()) {
-        content.Padding(Thickness{32, 5, 32, 6});
+        content.Padding(Thickness{46, 5, 46, 6});
       }
       if (const auto placeholder =
               FindNamedDescendant(address_box_,
                                   L"PlaceholderTextContentPresenter")
                   .try_as<ContentControl>()) {
-        placeholder.Padding(Thickness{32, 5, 32, 6});
+        placeholder.Padding(Thickness{46, 5, 46, 6});
       }
       if (const auto query_button =
               FindNamedDescendant(address_box_, L"QueryButton")
@@ -891,18 +909,20 @@ void Shell::BuildToolbar() {
       });
   security_button_ = MakeGlyphButton(L"\uE72E", L"View site information",
                                      WCS_COMMAND_SHOW_SITE_INFO);
-  security_button_.Width(kOmniboxButtonSize);
-  security_button_.Height(kOmniboxButtonSize);
+  security_button_.Content(OmniboxGlyph(L"\uE72E"));
+  security_button_.Width(kOmniboxButtonWidth);
+  security_button_.Height(kOmniboxButtonHeight);
   security_button_.HorizontalAlignment(HorizontalAlignment::Left);
-  security_button_.Margin(Thickness{6, 0, 0, 0});
+  security_button_.Margin(Thickness{8, 0, 0, 0});
   address_host.Children().Append(security_button_);
 
   favorite_button_ = MakeGlyphButton(L"\uE734", L"Add this page to favorites",
                                      WCS_COMMAND_BOOKMARK_PAGE);
-  favorite_button_.Width(kOmniboxButtonSize);
-  favorite_button_.Height(kOmniboxButtonSize);
+  favorite_button_.Content(OmniboxGlyph(L"\uE734"));
+  favorite_button_.Width(kOmniboxButtonWidth);
+  favorite_button_.Height(kOmniboxButtonHeight);
   favorite_button_.HorizontalAlignment(HorizontalAlignment::Right);
-  favorite_button_.Margin(Thickness{0, 0, 6, 0});
+  favorite_button_.Margin(Thickness{0, 0, 8, 0});
   address_host.Children().Append(favorite_button_);
 
   profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles",
@@ -1286,15 +1306,18 @@ void Shell::UpdateTabs(const WcsWindowState& state) {
       item = existing->second;
     }
 
-    // SelectedBackgroundPath is a shape inside TabViewItem's control
-    // template, so Control::Background does not drive it. Override the
-    // ThemeResource at the item itself; this is the nearest resource scope
-    // and reliably updates both the body and native lower shoulder geometry.
+    // Desktop XAML islands clip TabView's stock selected path to a straight
+    // item edge. Keep that path transparent, fill the native TabContainer,
+    // and let the two 4 px connector paths provide the visible shoulders.
     const auto selected_background_key = winrt::box_value(
         winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
+    const auto body_background_key = winrt::box_value(
+        winrt::hstring{L"TabViewItemHeaderBackground"});
     const auto drag_background_key = winrt::box_value(
         winrt::hstring{L"TabViewItemHeaderDragBackground"});
-    item.Resources().Insert(selected_background_key, toolbar_.Background());
+    const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
+    item.Resources().Insert(selected_background_key, transparent);
+    item.Resources().Insert(body_background_key, selected_tab_fill_);
     item.Resources().Insert(drag_background_key, toolbar_.Background());
 
     const wchar_t* title = tab.title && *tab.title ? tab.title : L"New tab";
@@ -1437,7 +1460,7 @@ void Shell::UpdateAddressSuggestions(std::wstring_view query) {
 
 void Shell::UpdateAddressSecurityState(std::wstring_view url) {
   const bool secure = StartsWithInsensitive(url, L"https://");
-  security_button_.Content(ToolbarGlyph(secure ? L"\uE72E" : L"\uE946"));
+  security_button_.Content(OmniboxGlyph(secure ? L"\uE72E" : L"\uE946"));
   const wchar_t* label = secure ? L"Connection is secure"
                                 : L"View site information";
   ToolTipService::SetToolTip(security_button_, winrt::box_value(label));
@@ -1468,7 +1491,7 @@ void Shell::ScheduleTabChromeUpdate() {
 }
 
 void Shell::UpdateTabShoulders() {
-  if (!left_tab_shoulder_ || !right_tab_shoulder_ || !root_) {
+  if (!root_ || !left_tab_shoulder_ || !right_tab_shoulder_) {
     return;
   }
   try {
@@ -1480,28 +1503,86 @@ void Shell::UpdateTabShoulders() {
       return;
     }
 
-    // WinUI 3 2.2 resolves this ThemeResource from the control theme rather
-    // than the item's logical resource ancestry in an unpackaged XAML island.
-    // Set the template shape directly after realization so the selected tab,
-    // including TabView's built-in lower arcs, uses the command-layer brush.
+    // WM_ACTIVATE starts a short timer so DWM and the XAML island have painted
+    // before this sample runs. Resolve the actual command-layer pixel only
+    // after that delay; sampling synchronously during activation can read the
+    // desktop behind the not-yet-presented island.
+    if (sample_tab_material_ && GetForegroundWindow() == parent_) {
+      sample_tab_material_ = false;
+      RECT client{};
+      GetClientRect(parent_, &client);
+      POINT sample{
+          bookmark_bar_visible_
+              ? std::max(0, static_cast<int>(client.right) / 2)
+              : 4,
+          static_cast<LONG>(
+              bookmark_bar_visible_
+                  ? kShellHeight + kBookmarkBarHeight / 2
+                  : kTabRowHeight + kToolbarHeight / 2)};
+      if (ClientToScreen(parent_, &sample)) {
+        if (HDC screen = GetDC(nullptr)) {
+          const COLORREF pixel = GetPixel(screen, sample.x, sample.y);
+          ReleaseDC(nullptr, screen);
+          if (pixel != CLR_INVALID) {
+            const BYTE red = GetRValue(pixel);
+            const BYTE green = GetGValue(pixel);
+            const BYTE blue = GetBValue(pixel);
+            const BYTE brightest = std::max({red, green, blue});
+            const BYTE darkest = std::min({red, green, blue});
+            // Mica can carry a subtle wallpaper tint, but the neutral
+            // commanding layer keeps its channels close together. A larger
+            // spread means DirectComposition has not presented yet and
+            // GetPixel saw the desktop behind the child island (the preview
+            // host deliberately uses a red desktop to catch this race).
+            if (brightest - darkest <= 48) {
+              selected_tab_fill_ =
+                  SolidColorBrush{Color(red, green, blue)};
+            }
+          }
+        }
+      }
+    }
+    if (!selected_tab_fill_) {
+      return;
+    }
+    const auto selected_key =
+        winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
+    const auto body_key =
+        winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackground"});
+    const auto transparent = SolidColorBrush{Color(0, 0, 0, 0)};
+    selected.Resources().Insert(selected_key, transparent);
+    selected.Resources().Insert(body_key, selected_tab_fill_);
     if (const auto selected_background =
             FindVisualChildByName(selected, L"SelectedBackgroundPath")
                 .try_as<winrt::Microsoft::UI::Xaml::Shapes::Shape>()) {
-      selected_background.Fill(toolbar_.Background());
+      selected_background.Fill(transparent);
     }
+    const auto tab_container =
+        FindVisualChildByName(selected, L"TabContainer")
+            .try_as<Grid>();
+    if (!tab_container || tab_container.ActualWidth() <= 0) {
+      return;
+    }
+    tab_container.Background(selected_tab_fill_);
+    left_tab_shoulder_.Fill(selected_tab_fill_);
+    right_tab_shoulder_.Fill(selected_tab_fill_);
 
-    const auto origin = selected.TransformToVisual(root_).TransformPoint(
+    const auto origin = tab_container.TransformToVisual(root_).TransformPoint(
         winrt::Windows::Foundation::Point{0, 0});
     if (origin.X < kTabShoulderSize ||
-        origin.X + selected.ActualWidth() + kTabShoulderSize >
+        origin.X + tab_container.ActualWidth() + kTabShoulderSize >
             root_.ActualWidth()) {
       return;
     }
-    Canvas::SetLeft(left_tab_shoulder_, origin.X - kTabShoulderSize);
+    // Overlap the opaque connector by one device-independent pixel. A Path
+    // ending exactly at the adjacent Grid boundary can rasterize its final
+    // column as transparent and leave a visible one-pixel slit.
+    Canvas::SetLeft(left_tab_shoulder_,
+                    origin.X - kTabShoulderSize + 1);
     Canvas::SetTop(left_tab_shoulder_,
                    kTabRowHeight - kTabShoulderSize);
     Canvas::SetLeft(right_tab_shoulder_,
-                    origin.X + selected.ActualWidth());
+                    origin.X + tab_container.ActualWidth() - 1);
     Canvas::SetTop(right_tab_shoulder_,
                    kTabRowHeight - kTabShoulderSize);
     left_tab_shoulder_.Visibility(Visibility::Visible);
@@ -1509,6 +1590,7 @@ void Shell::UpdateTabShoulders() {
   } catch (...) {
     left_tab_shoulder_.Visibility(Visibility::Collapsed);
     right_tab_shoulder_.Visibility(Visibility::Collapsed);
+    OutputDebugStringW(L"Curve Browser tab material update failed.\n");
   }
 }
 
@@ -2075,15 +2157,17 @@ void Shell::ApplySystemTheme() {
     const auto content_layer = ThemeBrush(
         L"LayerFillColorDefaultBrush",
         dark ? Color(58, 58, 58, 76) : Color(255, 255, 255, 128));
+    selected_tab_fill_ = SolidColorBrush{
+        dark ? Color(57, 57, 57) : Color(249, 249, 249)};
 
     root_.Background(transparent);
     tab_view_.Background(transparent);
     toolbar_.Background(commanding_layer);
     bookmark_bar_.Background(commanding_layer);
     sidebar_.Background(content_layer);
-    left_tab_shoulder_.Fill(commanding_layer);
-    right_tab_shoulder_.Fill(commanding_layer);
-    toolbar_divider_.Background(ThemeBrush(
+    left_tab_shoulder_.Fill(selected_tab_fill_);
+    right_tab_shoulder_.Fill(selected_tab_fill_);
+    bookmark_divider_.Background(ThemeBrush(
         L"DividerStrokeColorDefaultBrush",
         dark ? Color(255, 255, 255, 20) : Color(0, 0, 0, 20)));
     native_page_host_.Background(content_layer);
@@ -2099,9 +2183,9 @@ void Shell::ApplySystemTheme() {
     // path and its native shoulder geometry immediately.
     const auto app_resources =
         winrt::Microsoft::UI::Xaml::Application::Current().Resources();
-    app_resources.Insert(selected_key, commanding_layer);
+    app_resources.Insert(selected_key, transparent);
     app_resources.Insert(drag_key, commanding_layer);
-    tab_view_.Resources().Insert(selected_key, commanding_layer);
+    tab_view_.Resources().Insert(selected_key, transparent);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
     tab_view_.Resources().Insert(border_key, transparent);
   } catch (...) {
@@ -2130,6 +2214,12 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
                                            DWORD_PTR reference_data) {
   auto* shell = reinterpret_cast<Shell*>(reference_data);
   switch (message) {
+    case WM_ACTIVATE:
+      if (LOWORD(wparam) != WA_INACTIVE) {
+        SetTimer(window, kMaterialSampleTimerId, kMaterialSampleDelayMs,
+                 nullptr);
+      }
+      break;
     case WM_SYSCOMMAND:
       if ((wparam & 0xFFF0) == SC_MAXIMIZE ||
           ((wparam & 0xFFF0) == SC_RESTORE &&
@@ -2156,6 +2246,12 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
       SetTimer(window, kDeferredResizeTimerId, kDeferredResizeDelayMs, nullptr);
       break;
     case WM_TIMER:
+      if (wparam == kMaterialSampleTimerId) {
+        KillTimer(window, kMaterialSampleTimerId);
+        shell->sample_tab_material_ = true;
+        shell->ScheduleTabChromeUpdate();
+        break;
+      }
       if (wparam == kDeferredResizeTimerId) {
         KillTimer(window, kDeferredResizeTimerId);
         try {
@@ -2178,6 +2274,7 @@ LRESULT CALLBACK Shell::ParentSubclassProc(HWND window,
       break;
     case WM_NCDESTROY:
       KillTimer(window, kDeferredResizeTimerId);
+      KillTimer(window, kMaterialSampleTimerId);
       RemoveWindowSubclass(window, &Shell::ParentSubclassProc, subclass_id);
       shell->parent_ = nullptr;
       break;

@@ -128,6 +128,7 @@ class Shell final {
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
   bool tab_chrome_update_queued_ = false;
+  bool sample_tab_material_ = false;
   bool new_tab_request_pending_ = false;
   bool island_hidden_for_window_transition_ = false;
   bool work_area_maximized_ = false;
@@ -143,12 +144,13 @@ class Shell final {
   winrt::Microsoft::UI::Input::InputNonClientPointerSource
       non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
+  winrt::Microsoft::UI::Xaml::Media::Brush selected_tab_fill_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Canvas tab_shoulder_layer_{nullptr};
   winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
-  winrt::Microsoft::UI::Xaml::Controls::Border toolbar_divider_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Border bookmark_divider_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid bookmark_bar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::StackPanel bookmark_items_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid sidebar_{nullptr};
