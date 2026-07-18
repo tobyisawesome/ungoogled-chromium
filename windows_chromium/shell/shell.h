@@ -85,9 +85,7 @@ class Shell final {
   void UpdateAddressSuggestions(std::wstring_view query);
   void UpdateAddressSecurityState(std::wstring_view url);
   void UpdateTabShoulders();
-  void UpdateCaptionButtonVisual(
-      winrt::Microsoft::UI::Input::NonClientRegionKind kind,
-      int state);
+  void ToggleWorkAreaMaximize();
   void UpdateMaximizeGlyph();
   void UpdateNativePage(std::wstring_view url);
   void ResizeIsland();
@@ -123,6 +121,11 @@ class Shell final {
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
   bool tab_chrome_update_queued_ = false;
+  bool new_tab_request_pending_ = false;
+  bool island_hidden_for_window_transition_ = false;
+  bool work_area_maximized_ = false;
+  RECT restored_window_bounds_{};
+  size_t last_tab_count_ = 0;
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
   std::wstring active_url_;
@@ -138,6 +141,7 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Border toolbar_divider_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid caption_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
