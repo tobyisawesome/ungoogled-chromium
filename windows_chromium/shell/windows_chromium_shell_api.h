@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 5u
+#define WCS_API_VERSION 7u
 
 typedef void* WcsShellHandle;
 
@@ -58,6 +58,8 @@ typedef enum WcsCommand {
   WCS_COMMAND_FIND_TEXT = 46,
   WCS_COMMAND_FIND_NEXT = 47,
   WCS_COMMAND_CLOSE_FIND = 48,
+  WCS_COMMAND_OPEN_BOOKMARK = 49,
+  WCS_COMMAND_RESTORE_SESSION = 50,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -93,6 +95,13 @@ typedef struct WcsTabState {
   int32_t muted;
 } WcsTabState;
 
+typedef struct WcsBookmarkState {
+  uint32_t size;
+  const wchar_t* title;
+  const wchar_t* url;
+  int32_t is_folder;
+} WcsBookmarkState;
+
 typedef struct WcsWindowState {
   uint32_t size;
   const WcsTabState* tabs;
@@ -103,6 +112,9 @@ typedef struct WcsWindowState {
   int32_t is_incognito;
   const wchar_t* profile_name;
   int32_t restore_on_startup;
+  const WcsBookmarkState* bookmarks;
+  size_t bookmark_count;
+  int32_t bookmark_bar_visible;
 } WcsWindowState;
 
 typedef enum WcsContextMenuItemType {
@@ -138,6 +150,8 @@ WCS_EXPORT HRESULT __stdcall WcsUpdateWindowState(
 WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
 // Opens the native WinUI find-on-page flyout and focuses its query box.
 WCS_EXPORT void __stdcall WcsShowFind(WcsShellHandle shell);
+// Shows the native WinUI crash-recovery prompt.
+WCS_EXPORT void __stdcall WcsShowRestorePrompt(WcsShellHandle shell);
 // Renders the live XAML visual tree to a PNG for visual regression testing.
 // The operation is asynchronous; callers may watch for the output file.
 WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,

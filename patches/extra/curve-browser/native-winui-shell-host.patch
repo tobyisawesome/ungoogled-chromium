@@ -155,6 +155,20 @@ index c5b196b2be..59b150f585 100644
    // Remove the layout manager to avoid dangling. This needs to be earlier than
    // other cleanups that destroy views referenced in the layout manager.
    SetLayoutManager(nullptr);
+@@ -1435,6 +1448,13 @@ WebContents* BrowserView::GetActiveWebContents() {
+   return browser_->tab_strip_model()->GetActiveWebContents();
+ }
+
++#if BUILDFLAG(IS_WIN)
++bool BrowserView::ShowCurveBrowserRestorePrompt() {
++  return curve_browser_shell_ && curve_browser_shell_->is_active() &&
++         curve_browser_shell_->ShowRestorePrompt();
++}
++#endif
++
+ bool BrowserView::GetSupportsTabStrip() const {
+   return browser_->CanSupportWindowFeature(
+       Browser::WindowFeature::kFeatureTabStrip);
 @@ -2219,6 +2232,12 @@ void BrowserView::FullscreenStateChanged() {
                      !GetFocusManager()->GetFocusedView());
      }
@@ -359,6 +373,18 @@ index ef13f8f685..ed856447cb 100644
  struct DropData;
  class ExclusiveAccessBubbleViews;
  class ExclusiveAccessBubbleViewsContext;
+@@ -375,6 +378,11 @@ class BrowserView : public BrowserWindow,
+   // Returns the active WebContents.
+   content::WebContents* GetActiveWebContents();
+
++#if BUILDFLAG(IS_WIN)
++  // Uses the in-process WinUI shell for crash recovery when it is active.
++  bool ShowCurveBrowserRestorePrompt();
++#endif
++
+   // Returns true if the Browser object associated with this BrowserView
+   // supports tabs, such as all normal browsers, and tabbed apps like terminal.
+   bool GetSupportsTabStrip() const;
 @@ -1390,6 +1393,12 @@ class BrowserView : public BrowserWindow,
 
    base::CallbackListSubscription zoom_changed_subscription_;
@@ -377,7 +403,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,539 @@
+@@ -0,0 +1,594 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -400,8 +426,11 @@ index 0000000000..4afe757f1b
 +#include "base/task/sequenced_task_runner.h"
 +#include "chrome/app/chrome_command_ids.h"
 +#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 +#include "chrome/browser/prefs/session_startup_pref.h"
++#include "chrome/browser/printing/print_view_manager_common.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/session_restore.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/omnibox/omnibox_controller.h"
@@ -411,11 +440,15 @@ index 0000000000..4afe757f1b
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/bookmarks/common/bookmark_pref_names.h"
 +#include "components/find_in_page/find_tab_helper.h"
 +#include "components/find_in_page/find_types.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "components/omnibox/browser/autocomplete_classifier.h"
 +#include "components/omnibox/browser/autocomplete_match.h"
++#include "components/prefs/pref_service.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/favicon_status.h"
@@ -516,9 +549,11 @@ index 0000000000..4afe757f1b
 +      ResolveExport<UpdateWindowStateFn>(module_, "WcsUpdateWindowState");
 +  set_visible_ = ResolveExport<SetVisibleFn>(module_, "WcsSetVisible");
 +  show_find_ = ResolveExport<ShowFindFn>(module_, "WcsShowFind");
++  show_restore_prompt_ = ResolveExport<ShowRestorePromptFn>(
++      module_, "WcsShowRestorePrompt");
 +  if (!get_api_version || get_api_version() != WCS_API_VERSION ||
 +      !create_shell || !destroy_shell_ || !update_window_state_ ||
-+      !set_visible_ || !show_find_) {
++      !set_visible_ || !show_find_ || !show_restore_prompt_) {
 +    Unload();
 +    return false;
 +  }
@@ -549,6 +584,7 @@ index 0000000000..4afe757f1b
 +  update_window_state_ = nullptr;
 +  set_visible_ = nullptr;
 +  show_find_ = nullptr;
++  show_restore_prompt_ = nullptr;
 +  if (module_) {
 +    FreeLibrary(module_);
 +    module_ = nullptr;
@@ -603,6 +639,30 @@ index 0000000000..4afe757f1b
 +  }
 +  const SessionStartupPref startup_pref =
 +      SessionStartupPref::GetStartupPref(browser_->profile());
++  std::vector<std::wstring> bookmark_titles;
++  std::vector<std::wstring> bookmark_urls;
++  std::vector<WcsBookmarkState> bookmarks;
++  if (bookmarks::BookmarkModel* bookmark_model =
++          BookmarkModelFactory::GetForBrowserContext(browser_->profile());
++      bookmark_model && bookmark_model->loaded()) {
++    const bookmarks::BookmarkNode* bar = bookmark_model->bookmark_bar_node();
++    bookmark_titles.reserve(bar->children().size());
++    bookmark_urls.reserve(bar->children().size());
++    bookmarks.reserve(bar->children().size());
++    for (const auto& child : bar->children()) {
++      bookmark_titles.push_back(base::UTF16ToWide(child->GetTitle()));
++      bookmark_urls.push_back(
++          child->is_url() ? base::UTF8ToWide(child->url().spec()) : L"");
++      bookmarks.push_back(
++          WcsBookmarkState{sizeof(WcsBookmarkState),
++                           bookmark_titles.back().c_str(),
++                           bookmark_urls.back().c_str(),
++                           child->is_folder()});
++    }
++  }
++  const bool show_bookmark_bar =
++      browser_->profile()->GetPrefs()->GetBoolean(
++          bookmarks::prefs::kShowBookmarkBar);
 +  const WcsWindowState state{
 +      sizeof(WcsWindowState),
 +      tabs.data(),
@@ -613,6 +673,9 @@ index 0000000000..4afe757f1b
 +      browser_->profile()->IsOffTheRecord(),
 +      profile_name.c_str(),
 +      startup_pref.ShouldRestoreLastSession(),
++      bookmarks.data(),
++      bookmarks.size(),
++      show_bookmark_bar,
 +  };
 +  update_window_state_(shell_, &state);
 +}
@@ -627,6 +690,14 @@ index 0000000000..4afe757f1b
 +  if (shell_ && show_find_) {
 +    show_find_(shell_);
 +  }
++}
++
++bool CurveBrowserNativeShellHostWin::ShowRestorePrompt() {
++  if (!shell_ || !show_restore_prompt_) {
++    return false;
++  }
++  show_restore_prompt_(shell_);
++  return true;
 +}
 +
 +// static
@@ -830,7 +901,9 @@ index 0000000000..4afe757f1b
 +      ExecuteBrowserCommand(IDC_FIND);
 +      break;
 +    case WCS_COMMAND_PRINT:
-+      ExecuteBrowserCommand(IDC_PRINT);
++      if (model) {
++        printing::StartBasicPrint(model->GetActiveWebContents());
++      }
 +      break;
 +    case WCS_COMMAND_SAVE_PAGE:
 +      ExecuteBrowserCommand(IDC_SAVE_PAGE);
@@ -915,6 +988,14 @@ index 0000000000..4afe757f1b
 +        }
 +      }
 +      break;
++    case WCS_COMMAND_OPEN_BOOKMARK:
++      if (!text.empty()) {
++        NavigateFromOmnibox(text);
++      }
++      break;
++    case WCS_COMMAND_RESTORE_SESSION:
++      SessionRestore::RestoreSessionAfterCrash(browser_);
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
@@ -922,7 +1003,7 @@ new file mode 100644
 index 0000000000..c57df9a6bd
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,77 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -959,6 +1040,7 @@ index 0000000000..c57df9a6bd
 +  void SyncState();
 +  void SetVisible(bool visible);
 +  void ShowFind();
++  bool ShowRestorePrompt();
 +
 + private:
 +  using GetApiVersionFn = uint32_t(__stdcall*)();
@@ -970,6 +1052,7 @@ index 0000000000..c57df9a6bd
 +                                                  const WcsWindowState*);
 +  using SetVisibleFn = void(__stdcall*)(WcsShellHandle, BOOL);
 +  using ShowFindFn = void(__stdcall*)(WcsShellHandle);
++  using ShowRestorePromptFn = void(__stdcall*)(WcsShellHandle);
 +
 +  static void __stdcall InvokeCommandThunk(void* context,
 +                                           const WcsCommandArgs* args);
@@ -993,6 +1076,7 @@ index 0000000000..c57df9a6bd
 +  UpdateWindowStateFn update_window_state_ = nullptr;
 +  SetVisibleFn set_visible_ = nullptr;
 +  ShowFindFn show_find_ = nullptr;
++  ShowRestorePromptFn show_restore_prompt_ = nullptr;
 +  base::WeakPtrFactory<CurveBrowserNativeShellHostWin> weak_ptr_factory_{this};
 +};
 +
@@ -1002,7 +1086,7 @@ new file mode 100644
 index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,136 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1017,7 +1101,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 5u
++#define WCS_API_VERSION 7u
 +
 +typedef void* WcsShellHandle;
 +
@@ -1061,6 +1145,8 @@ index 0000000000..d96c09a84e
 +  WCS_COMMAND_FIND_TEXT = 46,
 +  WCS_COMMAND_FIND_NEXT = 47,
 +  WCS_COMMAND_CLOSE_FIND = 48,
++  WCS_COMMAND_OPEN_BOOKMARK = 49,
++  WCS_COMMAND_RESTORE_SESSION = 50,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {
@@ -1096,6 +1182,13 @@ index 0000000000..d96c09a84e
 +  int32_t muted;
 +} WcsTabState;
 +
++typedef struct WcsBookmarkState {
++  uint32_t size;
++  const wchar_t* title;
++  const wchar_t* url;
++  int32_t is_folder;
++} WcsBookmarkState;
++
 +typedef struct WcsWindowState {
 +  uint32_t size;
 +  const WcsTabState* tabs;
@@ -1106,6 +1199,9 @@ index 0000000000..d96c09a84e
 +  int32_t is_incognito;
 +  const wchar_t* profile_name;
 +  int32_t restore_on_startup;
++  const WcsBookmarkState* bookmarks;
++  size_t bookmark_count;
++  int32_t bookmark_bar_visible;
 +} WcsWindowState;
 +
 +typedef enum WcsContextMenuItemType {
@@ -1127,6 +1223,25 @@ index 0000000000..d96c09a84e
 +} WcsContextMenuItem;
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
+diff --git a/chrome/browser/ui/views/session_crashed_bubble_view.cc b/chrome/browser/ui/views/session_crashed_bubble_view.cc
+index 495fa2d9e0..3701aab9bf 100644
+--- a/chrome/browser/ui/views/session_crashed_bubble_view.cc
++++ b/chrome/browser/ui/views/session_crashed_bubble_view.cc
+@@ -258,6 +258,14 @@ void SessionCrashedBubbleView::Show(
+
+   if (browser && (skip_tab_checking ||
+                   browser->GetTabStripModel()->GetActiveWebContents())) {
++#if BUILDFLAG(IS_WIN)
++    if (BrowserView* browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser);
++        browser_view && browser_view->ShowCurveBrowserRestorePrompt()) {
++      RecordBubbleHistogramValue(SESSION_CRASHED_BUBBLE_SHOWN);
++      return;
++    }
++#endif
+     ShowBubble(browser, uma_opted_in_already, offer_uma_optin);
+     return;
+   }
 diff --git a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
 index 625e3b90c0..073ad7f811 100644
 --- a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc

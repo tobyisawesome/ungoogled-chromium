@@ -45,7 +45,10 @@ using namespace winrt::Microsoft::UI::Xaml::Controls;
 
 constexpr double kTabRowHeight = 48.0;
 constexpr double kToolbarHeight = 48.0;
+constexpr double kBookmarkBarHeight = 36.0;
+constexpr double kSidebarWidth = 320.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
+constexpr double kTabShoulderSize = 4.0;
 constexpr double kOmniboxButtonSize = 20.0;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
 constexpr UINT_PTR kDeferredResizeTimerId = 0x57435332;  // "WCS2"
@@ -276,6 +279,28 @@ Brush ThemeBrush(std::wstring_view key,
   return SolidColorBrush{fallback};
 }
 
+winrt::Microsoft::UI::Xaml::Media::Geometry TabShoulderGeometry(bool left) {
+  using namespace winrt::Microsoft::UI::Xaml::Media;
+  using winrt::Windows::Foundation::Point;
+
+  PathGeometry geometry;
+  PathFigure figure;
+  figure.StartPoint(left ? Point{4, 0} : Point{0, 0});
+  figure.IsClosed(true);
+
+  BezierSegment curve;
+  curve.Point1(left ? Point{4, 2.2f} : Point{0, 2.2f});
+  curve.Point2(left ? Point{2.2f, 4} : Point{1.8f, 4});
+  curve.Point3(left ? Point{0, 4} : Point{4, 4});
+  figure.Segments().Append(curve);
+
+  LineSegment bottom;
+  bottom.Point(left ? Point{4, 4} : Point{0, 4});
+  figure.Segments().Append(bottom);
+  geometry.Figures().Append(figure);
+  return geometry.as<Geometry>();
+}
+
 std::wstring StripMenuMnemonics(const wchar_t* source) {
   std::wstring result;
   if (!source) {
@@ -477,12 +502,21 @@ void Shell::ConfigureTitleBar() {
 
 void Shell::BuildVisualTree() {
   root_ = Grid{};
+  ColumnDefinition content_column;
+  content_column.Width(GridLength{1, GridUnitType::Star});
+  root_.ColumnDefinitions().Append(content_column);
+  ColumnDefinition sidebar_column;
+  sidebar_column.Width(GridLength{0, GridUnitType::Pixel});
+  root_.ColumnDefinitions().Append(sidebar_column);
   RowDefinition tabs_row;
   tabs_row.Height(GridLength{kTabRowHeight, GridUnitType::Pixel});
   root_.RowDefinitions().Append(tabs_row);
   RowDefinition toolbar_row;
   toolbar_row.Height(GridLength{kToolbarHeight, GridUnitType::Pixel});
   root_.RowDefinitions().Append(toolbar_row);
+  RowDefinition bookmark_row;
+  bookmark_row.Height(GridLength{0, GridUnitType::Pixel});
+  root_.RowDefinitions().Append(bookmark_row);
   RowDefinition page_row;
   page_row.Height(GridLength{1, GridUnitType::Star});
   root_.RowDefinitions().Append(page_row);
@@ -512,6 +546,7 @@ void Shell::BuildVisualTree() {
   tab_view_.Margin(Thickness{8, 0, caption_width, 0});
   tab_view_.VerticalAlignment(VerticalAlignment::Bottom);
   Grid::SetRow(tab_view_, 0);
+  Grid::SetColumnSpan(tab_view_, 2);
   Canvas::SetZIndex(tab_view_, 2);
   root_.Children().Append(tab_view_);
   tab_view_.Loaded([this](const auto&, const auto&) {
@@ -535,6 +570,36 @@ void Shell::BuildVisualTree() {
         ScheduleTabChromeUpdate();
       });
 
+  tab_shoulder_layer_ = Canvas{};
+  tab_shoulder_layer_.IsHitTestVisible(false);
+  tab_shoulder_layer_.HorizontalAlignment(HorizontalAlignment::Stretch);
+  tab_shoulder_layer_.VerticalAlignment(VerticalAlignment::Stretch);
+  Grid::SetRow(tab_shoulder_layer_, 0);
+  Grid::SetColumnSpan(tab_shoulder_layer_, 2);
+  // The TabView template paints an opaque header background even when the
+  // control Background is transparent. Keep the connector above that template;
+  // its paths live strictly outside the selected item and do not cover content.
+  Canvas::SetZIndex(tab_shoulder_layer_, 3);
+
+  left_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
+  left_tab_shoulder_.Width(kTabShoulderSize);
+  left_tab_shoulder_.Height(kTabShoulderSize);
+  left_tab_shoulder_.Stretch(
+      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
+  left_tab_shoulder_.Data(TabShoulderGeometry(true));
+  left_tab_shoulder_.Visibility(Visibility::Collapsed);
+  tab_shoulder_layer_.Children().Append(left_tab_shoulder_);
+
+  right_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
+  right_tab_shoulder_.Width(kTabShoulderSize);
+  right_tab_shoulder_.Height(kTabShoulderSize);
+  right_tab_shoulder_.Stretch(
+      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
+  right_tab_shoulder_.Data(TabShoulderGeometry(false));
+  right_tab_shoulder_.Visibility(Visibility::Collapsed);
+  tab_shoulder_layer_.Children().Append(right_tab_shoulder_);
+  root_.Children().InsertAt(0, tab_shoulder_layer_);
+
   // AppWindow still reserves its native RightInset, but those controls are
   // visually transparent and this single WinUI layer owns input. This avoids
   // the AppWindow maximize fail-fast on an unpackaged Chromium HWND while
@@ -545,6 +610,7 @@ void Shell::BuildVisualTree() {
   caption_host_.HorizontalAlignment(HorizontalAlignment::Right);
   caption_host_.VerticalAlignment(VerticalAlignment::Top);
   Grid::SetRow(caption_host_, 0);
+  Grid::SetColumnSpan(caption_host_, 2);
   Canvas::SetZIndex(caption_host_, 10);
   for (int index = 0; index < 3; ++index) {
     ColumnDefinition column;
@@ -628,10 +694,28 @@ void Shell::BuildVisualTree() {
       });
   BuildToolbar();
   BuildMenus();
+  BuildSidebar();
+
+  bookmark_bar_ = Grid{};
+  bookmark_bar_.Padding(Thickness{8, 2, 8, 2});
+  bookmark_bar_.Visibility(Visibility::Collapsed);
+  Grid::SetRow(bookmark_bar_, 2);
+  Grid::SetColumnSpan(bookmark_bar_, 2);
+  ScrollViewer bookmark_scroll;
+  bookmark_scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Auto);
+  bookmark_scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Disabled);
+  bookmark_scroll.HorizontalScrollMode(ScrollMode::Enabled);
+  bookmark_items_ = StackPanel{};
+  bookmark_items_.Orientation(Orientation::Horizontal);
+  bookmark_items_.Spacing(2);
+  bookmark_scroll.Content(bookmark_items_);
+  bookmark_bar_.Children().Append(bookmark_scroll);
+  root_.Children().Append(bookmark_bar_);
 
   native_page_host_ = Grid{};
   native_page_host_.Visibility(Visibility::Collapsed);
-  Grid::SetRow(native_page_host_, 2);
+  Grid::SetRow(native_page_host_, 3);
+  Grid::SetColumnSpan(native_page_host_, 2);
   root_.Children().Append(native_page_host_);
 }
 
@@ -680,6 +764,7 @@ void Shell::BuildToolbar() {
       winrt::box_value(winrt::hstring{L"ButtonBorderBrushDisabled"}),
       transparent);
   Grid::SetRow(toolbar_, 1);
+  Grid::SetColumnSpan(toolbar_, 2);
   root_.Children().Append(toolbar_);
 
   toolbar_divider_ = Border{};
@@ -688,6 +773,7 @@ void Shell::BuildToolbar() {
   toolbar_divider_.VerticalAlignment(VerticalAlignment::Bottom);
   toolbar_divider_.IsHitTestVisible(false);
   Canvas::SetZIndex(toolbar_divider_, 20);
+  Grid::SetColumnSpan(toolbar_divider_, 6);
   toolbar_.Children().Append(toolbar_divider_);
 
   const double button_width = 40;
@@ -875,6 +961,12 @@ void Shell::BuildMenus() {
   app_menu_.Items().Append(MakeMenuItem(L"Print", WCS_COMMAND_PRINT));
   app_menu_.Items().Append(
       MakeMenuItem(L"Save page as", WCS_COMMAND_SAVE_PAGE));
+  MenuFlyoutItem sidebar_item;
+  sidebar_item.Text(L"Sidebar");
+  sidebar_item.Icon(ContextMenuIcon(L"\uE76C"));
+  sidebar_item.Click(
+      [this](const auto&, const auto&) { ToggleSidebar(); });
+  app_menu_.Items().Append(sidebar_item);
   app_menu_.Items().Append(MenuFlyoutSeparator{});
   app_menu_.Items().Append(
       MakeMenuItem(L"Settings", WCS_COMMAND_OPEN_SETTINGS));
@@ -883,6 +975,90 @@ void Shell::BuildMenus() {
   app_menu_.Items().Append(MakeMenuItem(L"Exit", WCS_COMMAND_EXIT));
   menu_button_.Click(
       [this](const auto&, const auto&) { app_menu_.ShowAt(menu_button_); });
+}
+
+void Shell::BuildSidebar() {
+  sidebar_ = Grid{};
+  sidebar_.Visibility(Visibility::Collapsed);
+  sidebar_.Padding(Thickness{16, 12, 16, 16});
+  Grid::SetRow(sidebar_, 3);
+  Grid::SetColumn(sidebar_, 1);
+  Canvas::SetZIndex(sidebar_, 30);
+
+  RowDefinition header_row;
+  header_row.Height(GridLength{44, GridUnitType::Pixel});
+  sidebar_.RowDefinitions().Append(header_row);
+  RowDefinition content_row;
+  content_row.Height(GridLength{1, GridUnitType::Star});
+  sidebar_.RowDefinitions().Append(content_row);
+
+  Grid header;
+  ColumnDefinition title_column;
+  title_column.Width(GridLength{1, GridUnitType::Star});
+  header.ColumnDefinitions().Append(title_column);
+  ColumnDefinition close_column;
+  close_column.Width(GridLength{36, GridUnitType::Pixel});
+  header.ColumnDefinitions().Append(close_column);
+  TextBlock title;
+  title.Text(L"Curve sidebar");
+  title.FontSize(18);
+  title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+  title.VerticalAlignment(VerticalAlignment::Center);
+  header.Children().Append(title);
+  Button close;
+  close.Content(ToolbarGlyph(L"\uE711"));
+  close.Width(32);
+  close.Height(32);
+  close.Padding(Thickness{0});
+  close.BorderThickness(Thickness{0});
+  close.Background(SolidColorBrush{Color(0, 0, 0, 0)});
+  Grid::SetColumn(close, 1);
+  close.Click([this](const auto&, const auto&) { ToggleSidebar(); });
+  header.Children().Append(close);
+  sidebar_.Children().Append(header);
+
+  StackPanel destinations;
+  destinations.Spacing(4);
+  Grid::SetRow(destinations, 1);
+  const auto add_destination =
+      [this, &destinations](std::wstring_view title,
+                            std::wstring_view glyph,
+                            WcsCommand command) {
+        Button button;
+        StackPanel content;
+        content.Orientation(Orientation::Horizontal);
+        content.Spacing(10);
+        content.Children().Append(ToolbarGlyph(glyph));
+        TextBlock label;
+        label.Text(title);
+        label.VerticalAlignment(VerticalAlignment::Center);
+        content.Children().Append(label);
+        button.Content(content);
+        button.HorizontalAlignment(HorizontalAlignment::Stretch);
+        button.HorizontalContentAlignment(HorizontalAlignment::Left);
+        button.Height(40);
+        button.BorderThickness(Thickness{0});
+        button.Click([this, command](const auto&, const auto&) {
+          Invoke(command);
+        });
+        destinations.Children().Append(button);
+      };
+  add_destination(L"Bookmarks", L"\uE734", WCS_COMMAND_OPEN_BOOKMARKS);
+  add_destination(L"History", L"\uE81C", WCS_COMMAND_OPEN_HISTORY);
+  add_destination(L"Downloads", L"\uE896", WCS_COMMAND_OPEN_DOWNLOADS);
+  add_destination(L"Extensions", L"\uE7B8", WCS_COMMAND_OPEN_EXTENSIONS);
+  sidebar_.Children().Append(destinations);
+  root_.Children().Append(sidebar_);
+}
+
+void Shell::ToggleSidebar() {
+  sidebar_visible_ = !sidebar_visible_;
+  root_.ColumnDefinitions().GetAt(1).Width(
+      GridLength{sidebar_visible_ ? kSidebarWidth : 0, GridUnitType::Pixel});
+  sidebar_.Visibility(sidebar_visible_ ? Visibility::Visible
+                                      : Visibility::Collapsed);
+  ResizeIsland();
+  UpdateWindowRegion();
 }
 
 void Shell::ShowFindFlyout() {
@@ -985,6 +1161,7 @@ HRESULT Shell::Update(const WcsWindowState& state) {
   try {
     restore_on_startup_ = state.restore_on_startup != 0;
     UpdateTabs(state);
+    UpdateBookmarks(state);
     back_button_.IsEnabled(state.can_go_back != 0);
     forward_button_.IsEnabled(state.can_go_forward != 0);
     profile_button_.Content(
@@ -1001,6 +1178,55 @@ HRESULT Shell::Update(const WcsWindowState& state) {
   } catch (...) {
     return winrt::to_hresult();
   }
+}
+
+void Shell::UpdateBookmarks(const WcsWindowState& state) {
+  const bool visible = state.bookmark_bar_visible != 0;
+  if (bookmark_bar_visible_ != visible) {
+    bookmark_bar_visible_ = visible;
+    root_.RowDefinitions().GetAt(2).Height(
+        GridLength{visible ? kBookmarkBarHeight : 0, GridUnitType::Pixel});
+    bookmark_bar_.Visibility(visible ? Visibility::Visible
+                                    : Visibility::Collapsed);
+    ResizeIsland();
+  }
+  bookmark_items_.Children().Clear();
+  if (!visible) {
+    return;
+  }
+  for (size_t index = 0; index < state.bookmark_count; ++index) {
+    const WcsBookmarkState& bookmark = state.bookmarks[index];
+    Button button;
+    const std::wstring title =
+        bookmark.title && *bookmark.title ? bookmark.title : L"Bookmark";
+    button.Content(winrt::box_value(title));
+    button.Height(30);
+    button.Padding(Thickness{10, 0, 10, 0});
+    button.BorderThickness(Thickness{0});
+    button.CornerRadius(CornerRadius{4});
+    button.Background(SolidColorBrush{Color(0, 0, 0, 0)});
+    const std::wstring url = bookmark.url ? bookmark.url : L"";
+    button.Click([this, url, folder = bookmark.is_folder != 0](
+                     const auto&, const auto&) {
+      if (folder || url.empty()) {
+        Invoke(WCS_COMMAND_OPEN_BOOKMARKS);
+      } else {
+        Invoke(WCS_COMMAND_OPEN_BOOKMARK, -1, -1, url.c_str());
+      }
+    });
+    bookmark_items_.Children().Append(button);
+  }
+  Button overflow;
+  overflow.Content(ToolbarGlyph(L"\uE712"));
+  overflow.Width(30);
+  overflow.Height(30);
+  overflow.Padding(Thickness{0});
+  overflow.BorderThickness(Thickness{0});
+  overflow.Background(SolidColorBrush{Color(0, 0, 0, 0)});
+  ToolTipService::SetToolTip(overflow, winrt::box_value(L"All bookmarks"));
+  overflow.Click(
+      [this](const auto&, const auto&) { Invoke(WCS_COMMAND_OPEN_BOOKMARKS); });
+  bookmark_items_.Children().Append(overflow);
 }
 
 void Shell::UpdateTabs(const WcsWindowState& state) {
@@ -1242,10 +1468,12 @@ void Shell::ScheduleTabChromeUpdate() {
 }
 
 void Shell::UpdateTabShoulders() {
-  if (!root_) {
+  if (!left_tab_shoulder_ || !right_tab_shoulder_ || !root_) {
     return;
   }
   try {
+    left_tab_shoulder_.Visibility(Visibility::Collapsed);
+    right_tab_shoulder_.Visibility(Visibility::Collapsed);
     const auto selected = tab_view_.SelectedItem().try_as<TabViewItem>();
     if (!selected || selected.ActualWidth() <= 0 ||
         selected.ActualHeight() <= 0) {
@@ -1262,10 +1490,25 @@ void Shell::UpdateTabShoulders() {
       selected_background.Fill(toolbar_.Background());
     }
 
-    // SelectedBackgroundPath already owns the lower TabView shoulders. Do not
-    // draw a second translucent connector on top of it: alpha stacking is what
-    // made the small wedges visibly lighter than both the tab and toolbar.
+    const auto origin = selected.TransformToVisual(root_).TransformPoint(
+        winrt::Windows::Foundation::Point{0, 0});
+    if (origin.X < kTabShoulderSize ||
+        origin.X + selected.ActualWidth() + kTabShoulderSize >
+            root_.ActualWidth()) {
+      return;
+    }
+    Canvas::SetLeft(left_tab_shoulder_, origin.X - kTabShoulderSize);
+    Canvas::SetTop(left_tab_shoulder_,
+                   kTabRowHeight - kTabShoulderSize);
+    Canvas::SetLeft(right_tab_shoulder_,
+                    origin.X + selected.ActualWidth());
+    Canvas::SetTop(right_tab_shoulder_,
+                   kTabRowHeight - kTabShoulderSize);
+    left_tab_shoulder_.Visibility(Visibility::Visible);
+    right_tab_shoulder_.Visibility(Visibility::Visible);
   } catch (...) {
+    left_tab_shoulder_.Visibility(Visibility::Collapsed);
+    right_tab_shoulder_.Visibility(Visibility::Collapsed);
   }
 }
 
@@ -1538,6 +1781,34 @@ void Shell::SetVisible(bool visible) {
   }
 }
 
+void Shell::ShowRestorePrompt() {
+  restore_dialog_ = ContentDialog{};
+  restore_dialog_.XamlRoot(root_.XamlRoot());
+  restore_dialog_.Title(winrt::box_value(L"Restore pages?"));
+  restore_dialog_.PrimaryButtonText(L"Restore");
+  restore_dialog_.CloseButtonText(L"Not now");
+  restore_dialog_.DefaultButton(ContentDialogButton::Primary);
+
+  StackPanel content;
+  content.Spacing(12);
+  FontIcon icon;
+  icon.Glyph(L"\uE777");
+  icon.FontSize(28);
+  icon.HorizontalAlignment(HorizontalAlignment::Left);
+  content.Children().Append(icon);
+  TextBlock message;
+  message.Text(
+      L"Curve Browser didn\u2019t shut down correctly. Restore your previous "
+      L"windows and tabs?");
+  message.TextWrapping(winrt::Microsoft::UI::Xaml::TextWrapping::Wrap);
+  content.Children().Append(message);
+  restore_dialog_.Content(content);
+  restore_dialog_.PrimaryButtonClick([this](const auto&, const auto&) {
+    Invoke(WCS_COMMAND_RESTORE_SESSION);
+  });
+  restore_dialog_.ShowAsync();
+}
+
 HRESULT Shell::Capture(const wchar_t* output_path) {
   if (!output_path || !*output_path) {
     return E_INVALIDARG;
@@ -1695,7 +1966,13 @@ void Shell::ResizeIsland() {
   const UINT dpi = GetDpiForWindow(parent_);
   const double scale = static_cast<double>(dpi) / 96.0;
   const int shell_height = static_cast<int>(kShellHeight * scale + 0.5);
-  const int height = native_page_visible_ ? client.bottom : shell_height;
+  const int bookmark_height =
+      bookmark_bar_visible_
+          ? static_cast<int>(kBookmarkBarHeight * scale + 0.5)
+          : 0;
+  const int height = (native_page_visible_ || sidebar_visible_)
+                         ? client.bottom
+                         : shell_height + bookmark_height;
   if (client.right <= 0 || height <= 0) {
     return;
   }
@@ -1709,15 +1986,39 @@ void Shell::ResizeIsland() {
   // re-enter XAML's non-client transaction and surface as a 0xc000027b stowed
   // exception. Recompute passthrough regions on the XAML dispatcher instead.
   ScheduleTabChromeUpdate();
+  if (sidebar_visible_) {
+    root_.DispatcherQueue().TryEnqueue([this] { UpdateWindowRegion(); });
+  }
 }
 
 void Shell::UpdateWindowRegion() {
-  if (!island_window_) {
+  if (!island_window_ || !IsWindow(parent_)) {
     return;
   }
-  // AppWindow owns the caption controls and their native hit-test rectangles,
-  // so the island can retain Mica across the full width without a cutout.
-  SetWindowRgn(island_window_, nullptr, TRUE);
+  if (!sidebar_visible_ || native_page_visible_) {
+    SetWindowRgn(island_window_, nullptr, TRUE);
+    return;
+  }
+  RECT client{};
+  GetClientRect(parent_, &client);
+  const double scale = static_cast<double>(GetDpiForWindow(parent_)) / 96.0;
+  const int top_height = static_cast<int>(
+      (kShellHeight + (bookmark_bar_visible_ ? kBookmarkBarHeight : 0)) *
+          scale +
+      0.5);
+  const int sidebar_width =
+      static_cast<int>(kSidebarWidth * scale + 0.5);
+  HRGN top = CreateRectRgn(0, 0, client.right, top_height);
+  HRGN side = CreateRectRgn(
+      std::max(0, static_cast<int>(client.right) - sidebar_width), top_height,
+      client.right,
+      client.bottom);
+  CombineRgn(top, top, side, RGN_OR);
+  DeleteObject(side);
+  // SetWindowRgn takes ownership of `top` on success.
+  if (!SetWindowRgn(island_window_, top, TRUE)) {
+    DeleteObject(top);
+  }
 }
 
 void Shell::ApplySystemTheme() {
@@ -1778,6 +2079,10 @@ void Shell::ApplySystemTheme() {
     root_.Background(transparent);
     tab_view_.Background(transparent);
     toolbar_.Background(commanding_layer);
+    bookmark_bar_.Background(commanding_layer);
+    sidebar_.Background(content_layer);
+    left_tab_shoulder_.Fill(commanding_layer);
+    right_tab_shoulder_.Fill(commanding_layer);
     toolbar_divider_.Background(ThemeBrush(
         L"DividerStrokeColorDefaultBrush",
         dark ? Color(255, 255, 255, 20) : Color(0, 0, 0, 20)));
@@ -1786,6 +2091,8 @@ void Shell::ApplySystemTheme() {
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
     const auto drag_key =
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderDragBackground"});
+    const auto border_key =
+        winrt::box_value(winrt::hstring{L"TabViewBorderBrush"});
     // The WinUI control theme owns SelectedBackgroundPath in an unpackaged
     // island, so publish the override at the application resource scope as
     // well as the TabView/item scopes. ThemeResource then updates the loaded
@@ -1796,6 +2103,7 @@ void Shell::ApplySystemTheme() {
     app_resources.Insert(drag_key, commanding_layer);
     tab_view_.Resources().Insert(selected_key, commanding_layer);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
+    tab_view_.Resources().Insert(border_key, transparent);
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }
@@ -1950,6 +2258,12 @@ extern "C" void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible) {
 extern "C" void __stdcall WcsShowFind(WcsShellHandle shell) {
   if (shell) {
     static_cast<windows_chromium::Shell*>(shell)->ShowFindFlyout();
+  }
+}
+
+extern "C" void __stdcall WcsShowRestorePrompt(WcsShellHandle shell) {
+  if (shell) {
+    static_cast<windows_chromium::Shell*>(shell)->ShowRestorePrompt();
   }
 }
 

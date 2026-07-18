@@ -52,6 +52,7 @@ class Shell final {
   HRESULT Update(const WcsWindowState& state);
   void SetVisible(bool visible);
   void ShowFindFlyout();
+  void ShowRestorePrompt();
   HRESULT Capture(const wchar_t* output_path);
   int32_t ShowContextMenu(const WcsContextMenuItem* items,
                           size_t item_count,
@@ -66,6 +67,8 @@ class Shell final {
   void BuildVisualTree();
   void BuildToolbar();
   void BuildMenus();
+  void BuildSidebar();
+  void ToggleSidebar();
   void ConfigureTitleBar();
   void ScheduleTabChromeUpdate();
   void UpdateTitleBarRegions();
@@ -83,6 +86,7 @@ class Shell final {
               const wchar_t* text = nullptr,
               uint32_t event_flags = 0) const;
   void UpdateTabs(const WcsWindowState& state);
+  void UpdateBookmarks(const WcsWindowState& state);
   void UpdateAddressSuggestions(std::wstring_view query);
   void UpdateAddressSecurityState(std::wstring_view url);
   void UpdateTabShoulders();
@@ -119,6 +123,8 @@ class Shell final {
   bool address_editing_ = false;
   bool suppress_address_suggestions_ = false;
   bool native_page_visible_ = false;
+  bool bookmark_bar_visible_ = false;
+  bool sidebar_visible_ = false;
   bool active_tab_loading_ = false;
   bool restore_on_startup_ = false;
   bool tab_chrome_update_queued_ = false;
@@ -138,12 +144,20 @@ class Shell final {
       non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Canvas tab_shoulder_layer_{nullptr};
+  winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
+  winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Border toolbar_divider_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Grid bookmark_bar_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::StackPanel bookmark_items_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Grid sidebar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid caption_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Flyout find_flyout_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::ContentDialog
+      restore_dialog_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox find_box_{nullptr};
   ToolbarButton back_button_{nullptr};
   ToolbarButton forward_button_{nullptr};

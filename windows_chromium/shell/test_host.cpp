@@ -52,9 +52,14 @@ void PushState() {
                               0,
                               0};
   }
+  const std::array<WcsBookmarkState, 2> bookmarks{{
+      {sizeof(WcsBookmarkState), L"Curve Browser", L"https://example.com/", 0},
+      {sizeof(WcsBookmarkState), L"Bookmarks", L"", 1},
+  }};
   WcsWindowState state{sizeof(WcsWindowState), tabs.data(), tabs.size(),
                        g_active, 1, 0, 0, L"Local profile",
-                       g_restore_on_startup ? 1 : 0};
+                       g_restore_on_startup ? 1 : 0, bookmarks.data(),
+                       bookmarks.size(), 1};
   if (g_update && g_shell) {
     g_update(g_shell, &state);
   }
