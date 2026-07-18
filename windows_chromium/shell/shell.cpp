@@ -46,8 +46,7 @@ using namespace winrt::Microsoft::UI::Xaml::Controls;
 constexpr double kTabRowHeight = 48.0;
 constexpr double kToolbarHeight = 48.0;
 constexpr double kShellHeight = kTabRowHeight + kToolbarHeight;
-constexpr double kTabShoulderSize = 5.0;
-constexpr double kOmniboxButtonSize = 24.0;
+constexpr double kOmniboxButtonSize = 20.0;
 constexpr UINT_PTR kParentSubclassId = 0x57435331;  // "WCS1"
 constexpr UINT_PTR kDeferredResizeTimerId = 0x57435332;  // "WCS2"
 constexpr UINT_PTR kIslandSubclassId = 0x57435333;  // "WCS3"
@@ -275,28 +274,6 @@ Brush ThemeBrush(std::wstring_view key,
   } catch (...) {
   }
   return SolidColorBrush{fallback};
-}
-
-winrt::Microsoft::UI::Xaml::Media::Geometry TabShoulderGeometry(bool left) {
-  using namespace winrt::Microsoft::UI::Xaml::Media;
-  using winrt::Windows::Foundation::Point;
-
-  PathGeometry geometry;
-  PathFigure figure;
-  figure.StartPoint(left ? Point{5, 0} : Point{0, 0});
-  figure.IsClosed(true);
-
-  BezierSegment curve;
-  curve.Point1(left ? Point{5, 2.75f} : Point{0, 2.75f});
-  curve.Point2(left ? Point{2.75f, 5} : Point{2.25f, 5});
-  curve.Point3(left ? Point{0, 5} : Point{5, 5});
-  figure.Segments().Append(curve);
-
-  LineSegment bottom;
-  bottom.Point(left ? Point{5, 5} : Point{0, 5});
-  figure.Segments().Append(bottom);
-  geometry.Figures().Append(figure);
-  return geometry.as<Geometry>();
 }
 
 std::wstring StripMenuMnemonics(const wchar_t* source) {
@@ -558,37 +535,6 @@ void Shell::BuildVisualTree() {
         ScheduleTabChromeUpdate();
       });
 
-  tab_shoulder_layer_ = Canvas{};
-  tab_shoulder_layer_.IsHitTestVisible(false);
-  tab_shoulder_layer_.HorizontalAlignment(HorizontalAlignment::Stretch);
-  tab_shoulder_layer_.VerticalAlignment(VerticalAlignment::Stretch);
-  Grid::SetRow(tab_shoulder_layer_, 0);
-  Canvas::SetZIndex(tab_shoulder_layer_, 1);
-
-  left_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
-  left_tab_shoulder_.Width(kTabShoulderSize);
-  left_tab_shoulder_.Height(kTabShoulderSize);
-  left_tab_shoulder_.Stretch(
-      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
-  left_tab_shoulder_.Data(TabShoulderGeometry(true));
-  left_tab_shoulder_.Visibility(Visibility::Collapsed);
-  tab_shoulder_layer_.Children().Append(left_tab_shoulder_);
-
-  right_tab_shoulder_ = winrt::Microsoft::UI::Xaml::Shapes::Path{};
-  right_tab_shoulder_.Width(kTabShoulderSize);
-  right_tab_shoulder_.Height(kTabShoulderSize);
-  right_tab_shoulder_.Stretch(
-      winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
-  right_tab_shoulder_.Data(TabShoulderGeometry(false));
-  right_tab_shoulder_.Visibility(Visibility::Collapsed);
-  tab_shoulder_layer_.Children().Append(right_tab_shoulder_);
-
-  // Put the connector below TabView so native text, close buttons, separators,
-  // and pointer states remain entirely owned by the control. The material
-  // wedges remain visible only in the transparent space beside the selected
-  // item and never participate in hit testing.
-  root_.Children().InsertAt(0, tab_shoulder_layer_);
-
   // AppWindow still reserves its native RightInset, but those controls are
   // visually transparent and this single WinUI layer owns input. This avoids
   // the AppWindow maximize fail-fast on an unpackaged Chromium HWND while
@@ -783,7 +729,7 @@ void Shell::BuildToolbar() {
   address_box_.PlaceholderText(L"Search or enter an address");
   address_box_.Height(32);
   address_box_.Margin(Thickness{4, 0, 8, 0});
-  address_box_.Padding(Thickness{36, 5, 36, 6});
+  address_box_.Padding(Thickness{32, 5, 32, 6});
   address_box_.QueryIcon(nullptr);
   address_box_.Loaded([this](const auto&, const auto&) {
     address_box_.ApplyTemplate();
@@ -791,13 +737,13 @@ void Shell::BuildToolbar() {
       if (const auto content =
               FindNamedDescendant(address_box_, L"ContentElement")
                   .try_as<ScrollViewer>()) {
-        content.Padding(Thickness{36, 5, 36, 6});
+        content.Padding(Thickness{32, 5, 32, 6});
       }
       if (const auto placeholder =
               FindNamedDescendant(address_box_,
                                   L"PlaceholderTextContentPresenter")
                   .try_as<ContentControl>()) {
-        placeholder.Padding(Thickness{36, 5, 36, 6});
+        placeholder.Padding(Thickness{32, 5, 32, 6});
       }
       if (const auto query_button =
               FindNamedDescendant(address_box_, L"QueryButton")
@@ -862,7 +808,7 @@ void Shell::BuildToolbar() {
   security_button_.Width(kOmniboxButtonSize);
   security_button_.Height(kOmniboxButtonSize);
   security_button_.HorizontalAlignment(HorizontalAlignment::Left);
-  security_button_.Margin(Thickness{5, 0, 0, 0});
+  security_button_.Margin(Thickness{6, 0, 0, 0});
   address_host.Children().Append(security_button_);
 
   favorite_button_ = MakeGlyphButton(L"\uE734", L"Add this page to favorites",
@@ -870,7 +816,7 @@ void Shell::BuildToolbar() {
   favorite_button_.Width(kOmniboxButtonSize);
   favorite_button_.Height(kOmniboxButtonSize);
   favorite_button_.HorizontalAlignment(HorizontalAlignment::Right);
-  favorite_button_.Margin(Thickness{0, 0, 5, 0});
+  favorite_button_.Margin(Thickness{0, 0, 6, 0});
   address_host.Children().Append(favorite_button_);
 
   profile_button_ = MakeGlyphButton(L"\uE77B", L"Profiles",
@@ -920,7 +866,12 @@ void Shell::BuildMenus() {
   app_menu_.Items().Append(
       MakeMenuItem(L"Extensions", WCS_COMMAND_OPEN_EXTENSIONS));
   app_menu_.Items().Append(MenuFlyoutSeparator{});
-  app_menu_.Items().Append(MakeMenuItem(L"Find on page", WCS_COMMAND_FIND));
+  MenuFlyoutItem find_item;
+  find_item.Text(L"Find on page");
+  find_item.Icon(ContextMenuIcon(L"\uE721"));
+  find_item.Click(
+      [this](const auto&, const auto&) { ShowFindFlyout(); });
+  app_menu_.Items().Append(find_item);
   app_menu_.Items().Append(MakeMenuItem(L"Print", WCS_COMMAND_PRINT));
   app_menu_.Items().Append(
       MakeMenuItem(L"Save page as", WCS_COMMAND_SAVE_PAGE));
@@ -932,6 +883,84 @@ void Shell::BuildMenus() {
   app_menu_.Items().Append(MakeMenuItem(L"Exit", WCS_COMMAND_EXIT));
   menu_button_.Click(
       [this](const auto&, const auto&) { app_menu_.ShowAt(menu_button_); });
+}
+
+void Shell::ShowFindFlyout() {
+  if (!find_flyout_) {
+    find_flyout_ = Flyout{};
+    find_flyout_.Placement(
+        winrt::Microsoft::UI::Xaml::Controls::Primitives::
+            FlyoutPlacementMode::BottomEdgeAlignedRight);
+
+    Grid panel;
+    panel.Padding(Thickness{8});
+    panel.ColumnSpacing(4);
+
+    ColumnDefinition text_column;
+    text_column.Width(GridLength{240, GridUnitType::Pixel});
+    panel.ColumnDefinitions().Append(text_column);
+    for (int index = 0; index < 3; ++index) {
+      ColumnDefinition button_column;
+      button_column.Width(GridLength{32, GridUnitType::Pixel});
+      panel.ColumnDefinitions().Append(button_column);
+    }
+
+    find_box_ = TextBox{};
+    find_box_.PlaceholderText(L"Find on page");
+    find_box_.Height(32);
+    find_box_.VerticalContentAlignment(VerticalAlignment::Center);
+    find_box_.TextChanged([this](const auto&, const auto&) {
+      const std::wstring query = find_box_.Text().c_str();
+      if (!query.empty()) {
+        Invoke(WCS_COMMAND_FIND_TEXT, active_tab_id_, active_index_,
+               query.c_str());
+      }
+    });
+    panel.Children().Append(find_box_);
+
+    const auto make_find_button = [](std::wstring_view glyph,
+                                     std::wstring_view name) {
+      Button button;
+      button.Width(28);
+      button.Height(28);
+      button.Padding(Thickness{0});
+      button.Content(ToolbarGlyph(glyph));
+      ToolTipService::SetToolTip(button, winrt::box_value(name));
+      winrt::Microsoft::UI::Xaml::Automation::AutomationProperties::SetName(
+          button, name);
+      return button;
+    };
+    Button previous = make_find_button(L"\uE70E", L"Previous result");
+    Grid::SetColumn(previous, 1);
+    previous.Click([this](const auto&, const auto&) {
+      const std::wstring query = find_box_.Text().c_str();
+      Invoke(WCS_COMMAND_FIND_NEXT, active_tab_id_, active_index_,
+             query.c_str(), 0);
+    });
+    panel.Children().Append(previous);
+
+    Button next = make_find_button(L"\uE70D", L"Next result");
+    Grid::SetColumn(next, 2);
+    next.Click([this](const auto&, const auto&) {
+      const std::wstring query = find_box_.Text().c_str();
+      Invoke(WCS_COMMAND_FIND_NEXT, active_tab_id_, active_index_,
+             query.c_str(), 1);
+    });
+    panel.Children().Append(next);
+
+    Button close = make_find_button(L"\uE711", L"Close find");
+    Grid::SetColumn(close, 3);
+    close.Click(
+        [this](const auto&, const auto&) { find_flyout_.Hide(); });
+    panel.Children().Append(close);
+    find_flyout_.Content(panel);
+    find_flyout_.Closed([this](const auto&, const auto&) {
+      Invoke(WCS_COMMAND_CLOSE_FIND, active_tab_id_, active_index_);
+    });
+  }
+  find_flyout_.ShowAt(menu_button_);
+  find_box_.Focus(winrt::Microsoft::UI::Xaml::FocusState::Programmatic);
+  find_box_.SelectAll();
 }
 
 void Shell::Invoke(WcsCommand command,
@@ -1213,14 +1242,10 @@ void Shell::ScheduleTabChromeUpdate() {
 }
 
 void Shell::UpdateTabShoulders() {
-  if (!left_tab_shoulder_ || !right_tab_shoulder_ || !root_) {
+  if (!root_) {
     return;
   }
   try {
-    // Hide the previous frame before reading layout. If TabView is between
-    // realization passes, no stale connector can remain under another tab.
-    left_tab_shoulder_.Visibility(Visibility::Collapsed);
-    right_tab_shoulder_.Visibility(Visibility::Collapsed);
     const auto selected = tab_view_.SelectedItem().try_as<TabViewItem>();
     if (!selected || selected.ActualWidth() <= 0 ||
         selected.ActualHeight() <= 0) {
@@ -1237,29 +1262,10 @@ void Shell::UpdateTabShoulders() {
       selected_background.Fill(toolbar_.Background());
     }
 
-    const auto origin = selected.TransformToVisual(root_).TransformPoint(
-        winrt::Windows::Foundation::Point{0, 0});
-    // The unpackaged-island TabView template does not expose its lower arcs.
-    // Draw one compact pair of File Explorer-scale shoulders in the bottom of
-    // the tab row. The Canvas is clipped to that row, so a transient layout
-    // origin can never paint into the toolbar.
-    // They curve into the command surface and terminate at its boundary;
-    // nothing is painted over the toolbar itself.
-    if (origin.X < 0 || origin.X + selected.ActualWidth() > root_.ActualWidth()) {
-      return;
-    }
-    Canvas::SetLeft(left_tab_shoulder_, origin.X - kTabShoulderSize);
-    Canvas::SetTop(left_tab_shoulder_,
-                   kTabRowHeight - kTabShoulderSize);
-    Canvas::SetLeft(right_tab_shoulder_,
-                    origin.X + selected.ActualWidth());
-    Canvas::SetTop(right_tab_shoulder_,
-                   kTabRowHeight - kTabShoulderSize);
-    left_tab_shoulder_.Visibility(Visibility::Visible);
-    right_tab_shoulder_.Visibility(Visibility::Visible);
+    // SelectedBackgroundPath already owns the lower TabView shoulders. Do not
+    // draw a second translucent connector on top of it: alpha stacking is what
+    // made the small wedges visibly lighter than both the tab and toolbar.
   } catch (...) {
-    left_tab_shoulder_.Visibility(Visibility::Collapsed);
-    right_tab_shoulder_.Visibility(Visibility::Collapsed);
   }
 }
 
@@ -1776,15 +1782,10 @@ void Shell::ApplySystemTheme() {
         L"DividerStrokeColorDefaultBrush",
         dark ? Color(255, 255, 255, 20) : Color(0, 0, 0, 20)));
     native_page_host_.Background(content_layer);
-    left_tab_shoulder_.Fill(commanding_layer);
-    right_tab_shoulder_.Fill(commanding_layer);
-
     const auto selected_key =
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderBackgroundSelected"});
     const auto drag_key =
         winrt::box_value(winrt::hstring{L"TabViewItemHeaderDragBackground"});
-    const auto shoulder_key =
-        winrt::box_value(winrt::hstring{L"TabViewBorderBrush"});
     // The WinUI control theme owns SelectedBackgroundPath in an unpackaged
     // island, so publish the override at the application resource scope as
     // well as the TabView/item scopes. ThemeResource then updates the loaded
@@ -1795,10 +1796,6 @@ void Shell::ApplySystemTheme() {
     app_resources.Insert(drag_key, commanding_layer);
     tab_view_.Resources().Insert(selected_key, commanding_layer);
     tab_view_.Resources().Insert(drag_key, commanding_layer);
-    // The separate shoulder paths provide the complete lower connector. Keep
-    // TabView's own translucent border clear so it cannot alpha-stack with a
-    // shoulder and leave a dark nib where the two geometries meet.
-    tab_view_.Resources().Insert(shoulder_key, transparent);
   } catch (...) {
     root_.RequestedTheme(ElementTheme::Default);
   }

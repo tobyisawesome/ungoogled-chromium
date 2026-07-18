@@ -106,7 +106,7 @@ try {
     'Back (Alt+Left)',
     'Forward (Alt+Right)',
     'Reload (Ctrl+R)',
-    'Profiles — Local profile',
+    "Profiles $([char]0x2014) Local profile",
     'Settings and more',
     'Minimize',
     'Maximize',
@@ -119,7 +119,9 @@ try {
   }
 
   $initialTab = Get-SelectedTabName -Root $root
-  foreach ($flyoutButtonName in @('Profiles — Local profile', 'Settings and more')) {
+  foreach ($flyoutButtonName in @(
+      "Profiles $([char]0x2014) Local profile",
+      'Settings and more')) {
     $button = Find-DescendantByName -Root $root -Name $flyoutButtonName
     $invoke = $button.GetCurrentPattern(
       [System.Windows.Automation.InvokePattern]::Pattern)

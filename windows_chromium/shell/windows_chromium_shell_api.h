@@ -55,6 +55,9 @@ typedef enum WcsCommand {
   WCS_COMMAND_BOOKMARK_PAGE = 43,
   WCS_COMMAND_SHOW_SITE_INFO = 44,
   WCS_COMMAND_FOCUS_CONTENT = 45,
+  WCS_COMMAND_FIND_TEXT = 46,
+  WCS_COMMAND_FIND_NEXT = 47,
+  WCS_COMMAND_CLOSE_FIND = 48,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {

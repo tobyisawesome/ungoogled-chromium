@@ -349,7 +349,7 @@ new file mode 100644
 index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,491 @@
+@@ -0,0 +1,531 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -383,6 +383,8 @@ index 0000000000..4afe757f1b
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/find_in_page/find_tab_helper.h"
++#include "components/find_in_page/find_types.h"
 +#include "components/sessions/content/session_tab_helper.h"
 +#include "components/omnibox/browser/autocomplete_classifier.h"
 +#include "components/omnibox/browser/autocomplete_match.h"
@@ -849,6 +851,34 @@ index 0000000000..4afe757f1b
 +        contents->Focus();
 +      }
 +      break;
++    case WCS_COMMAND_FIND_TEXT:
++    case WCS_COMMAND_FIND_NEXT:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        if (auto* helper =
++                find_in_page::FindTabHelper::FromWebContents(contents)) {
++          std::u16string query = base::WideToUTF16(text);
++          if (query.empty()) {
++            query = helper->find_text();
++          }
++          if (!query.empty()) {
++            helper->set_find_ui_active(true);
++            helper->StartFinding(
++                std::move(query),
++                command == WCS_COMMAND_FIND_TEXT || event_flags != 0,
++                false, true);
++          }
++        }
++      }
++      break;
++    case WCS_COMMAND_CLOSE_FIND:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        if (auto* helper =
++                find_in_page::FindTabHelper::FromWebContents(contents)) {
++          helper->StopFinding(find_in_page::SelectionAction::kKeep);
++          helper->set_find_ui_active(false);
++        }
++      }
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
@@ -933,7 +963,7 @@ new file mode 100644
 index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,124 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -989,6 +1019,9 @@ index 0000000000..d96c09a84e
 +  WCS_COMMAND_BOOKMARK_PAGE = 43,
 +  WCS_COMMAND_SHOW_SITE_INFO = 44,
 +  WCS_COMMAND_FOCUS_CONTENT = 45,
++  WCS_COMMAND_FIND_TEXT = 46,
++  WCS_COMMAND_FIND_NEXT = 47,
++  WCS_COMMAND_CLOSE_FIND = 48,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {

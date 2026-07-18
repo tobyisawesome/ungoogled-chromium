@@ -65,6 +65,7 @@ class Shell final {
   void BuildVisualTree();
   void BuildToolbar();
   void BuildMenus();
+  void ShowFindFlyout();
   void ConfigureTitleBar();
   void ScheduleTabChromeUpdate();
   void UpdateTitleBarRegions();
@@ -137,14 +138,13 @@ class Shell final {
       non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
-  winrt::Microsoft::UI::Xaml::Controls::Canvas tab_shoulder_layer_{nullptr};
-  winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
-  winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Border toolbar_divider_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid caption_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Flyout find_flyout_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBox find_box_{nullptr};
   ToolbarButton back_button_{nullptr};
   ToolbarButton forward_button_{nullptr};
   ToolbarButton reload_button_{nullptr};
