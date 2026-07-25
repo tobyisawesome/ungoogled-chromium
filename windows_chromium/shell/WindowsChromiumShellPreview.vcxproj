@@ -57,10 +57,19 @@
         SourceFiles="$(OutDir)$(TargetName).pri"
         DestinationFiles="$(OutDir)chrome.pri"
         SkipUnchangedFiles="true" />
+    <ReadLinesFromFile File="$(OutDir)curve_browser_payload_manifest.txt">
+      <Output TaskParameter="Lines" ItemName="CurveBrowserExistingPayload" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <CurveBrowserExistingPayload Remove="chrome.pri" />
+    </ItemGroup>
+    <RemoveDuplicates Inputs="@(CurveBrowserExistingPayload)">
+      <Output TaskParameter="Filtered" ItemName="CurveBrowserUniquePayload" />
+    </RemoveDuplicates>
     <WriteLinesToFile
         File="$(OutDir)curve_browser_payload_manifest.txt"
-        Lines="chrome.pri"
-        Overwrite="false"
+        Lines="@(CurveBrowserUniquePayload);chrome.pri"
+        Overwrite="true"
         Encoding="UTF-8" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

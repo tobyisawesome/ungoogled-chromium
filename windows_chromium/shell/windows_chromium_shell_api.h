@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 10u
+#define WCS_API_VERSION 11u
 
 typedef void* WcsShellHandle;
 
@@ -64,6 +64,8 @@ typedef enum WcsCommand {
   WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
   WCS_COMMAND_SAVE_BOOKMARK = 53,
   WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
+  WCS_COMMAND_SET_DEFAULT_BROWSER = 55,
+  WCS_COMMAND_DISMISS_DEFAULT_BROWSER = 56,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -182,6 +184,11 @@ WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
 WCS_EXPORT void __stdcall WcsShowFind(WcsShellHandle shell);
 // Shows the native WinUI crash-recovery prompt.
 WCS_EXPORT void __stdcall WcsShowRestorePrompt(WcsShellHandle shell);
+// Shows the native WinUI default-browser prompt. Repeated calls while the
+// prompt is open are coalesced into the existing dialog.
+WCS_EXPORT void __stdcall WcsShowDefaultBrowserPrompt(
+    WcsShellHandle shell,
+    BOOL can_pin_to_taskbar);
 // Renders the live XAML visual tree to a PNG for visual regression testing.
 // The operation is asynchronous; callers may watch for the output file.
 WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,

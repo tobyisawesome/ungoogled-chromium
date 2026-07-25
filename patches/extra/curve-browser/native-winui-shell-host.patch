@@ -11,6 +11,48 @@ diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
        ]
      }
 
+diff --git a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
+--- a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
++++ b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
+@@ -12,6 +12,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/default_browser/default_browser_controller.h"
+ #include "chrome/browser/default_browser/default_browser_manager.h"
+@@ -27,6 +28,11 @@
+ #include "components/infobars/core/infobar.h"
+ #include "components/prefs/pref_service.h"
+ 
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#endif
++
+ using CloseReason = DefaultBrowserPromptManager::CloseReason;
+ 
+ DefaultBrowserInfoBarManager::DefaultBrowserInfoBarManager() = default;
+@@ -100,6 +106,18 @@ void DefaultBrowserInfoBarManager::CreateInfoBarForWebContents(
+   // Ensure that an infobar hasn't already been created.
+   CHECK(!infobars_.contains(web_contents));
+ 
++#if BUILDFLAG(IS_WIN)
++  if (Browser* browser = chrome::FindBrowserWithTab(web_contents)) {
++    if (BrowserView* browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser);
++        browser_view &&
++        browser_view->ShowCurveBrowserDefaultBrowserPrompt(
++            can_pin_to_taskbar())) {
++      return;
++    }
++  }
++#endif
++
+   infobars::InfoBar* infobar = DefaultBrowserInfoBarDelegate::Create(
+       infobars::ContentInfoBarManager::FromWebContents(web_contents), profile,
+       can_pin_to_taskbar());
 diff --git a/chrome/browser/ui/views/frame/browser_frame_view_win.cc b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
 --- a/chrome/browser/ui/views/frame/browser_frame_view_win.cc
 +++ b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
@@ -135,7 +177,7 @@ diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/v
    // Remove the layout manager to avoid dangling. This needs to be earlier than
    // other cleanups that destroy views referenced in the layout manager.
    SetLayoutManager(nullptr);
-@@ -1438,6 +1448,13 @@ WebContents* BrowserView::GetActiveWebContents() {
+@@ -1438,6 +1448,19 @@ WebContents* BrowserView::GetActiveWebContents() {
    return browser_->tab_strip_model()->GetActiveWebContents();
  }
 
@@ -143,6 +185,12 @@ diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/v
 +bool BrowserView::ShowCurveBrowserRestorePrompt() {
 +  return curve_browser_shell_ && curve_browser_shell_->is_active() &&
 +         curve_browser_shell_->ShowRestorePrompt();
++}
++
++bool BrowserView::ShowCurveBrowserDefaultBrowserPrompt(
++    bool can_pin_to_taskbar) {
++  return curve_browser_shell_ && curve_browser_shell_->is_active() &&
++         curve_browser_shell_->ShowDefaultBrowserPrompt(can_pin_to_taskbar);
 +}
 +#endif
 +
@@ -345,13 +393,15 @@ diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/vi
  struct DropData;
  class ExclusiveAccessBubbleViews;
  class ExclusiveAccessBubbleViewsContext;
-@@ -375,6 +378,11 @@ class BrowserView : public BrowserWindow,
+@@ -375,6 +378,13 @@ class BrowserView : public BrowserWindow,
    // Returns the active WebContents.
    content::WebContents* GetActiveWebContents();
 
 +#if BUILDFLAG(IS_WIN)
 +  // Uses the in-process WinUI shell for crash recovery when it is active.
 +  bool ShowCurveBrowserRestorePrompt();
++  // Replaces Chromium's startup infobar with a native WinUI prompt.
++  bool ShowCurveBrowserDefaultBrowserPrompt(bool can_pin_to_taskbar);
 +#endif
 +
    // Returns true if the Browser object associated with this BrowserView
@@ -374,7 +424,7 @@ diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.c
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,884 @@
+@@ -0,0 +1,908 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -412,6 +462,8 @@ new file mode 100644
 +#include "chrome/browser/ui/omnibox/omnibox_controller.h"
 +#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 +#include "chrome/browser/ui/omnibox/omnibox_view.h"
++#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
++#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_prefs.h"
 +#include "chrome/browser/ui/tabs/tab_enums.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
@@ -620,9 +672,12 @@ new file mode 100644
 +  show_find_ = ResolveExport<ShowFindFn>(module_, "WcsShowFind");
 +  show_restore_prompt_ = ResolveExport<ShowRestorePromptFn>(
 +      module_, "WcsShowRestorePrompt");
++  show_default_browser_prompt_ = ResolveExport<ShowDefaultBrowserPromptFn>(
++      module_, "WcsShowDefaultBrowserPrompt");
 +  if (!get_api_version || get_api_version() != WCS_API_VERSION ||
 +      !create_shell || !destroy_shell_ || !update_window_state_ ||
-+      !set_visible_ || !show_find_ || !show_restore_prompt_) {
++      !set_visible_ || !show_find_ || !show_restore_prompt_ ||
++      !show_default_browser_prompt_) {
 +    Unload();
 +    return false;
 +  }
@@ -654,6 +709,7 @@ new file mode 100644
 +  set_visible_ = nullptr;
 +  show_find_ = nullptr;
 +  show_restore_prompt_ = nullptr;
++  show_default_browser_prompt_ = nullptr;
 +  // module_ is borrowed from the process-lifetime shell module. XAML island
 +  // cleanup may continue after WcsDestroyShell returns, so unloading it here
 +  // would invalidate WinUI event delegates still queued on this UI thread.
@@ -874,6 +930,15 @@ new file mode 100644
 +    return false;
 +  }
 +  show_restore_prompt_(shell_);
++  return true;
++}
++
++bool CurveBrowserNativeShellHostWin::ShowDefaultBrowserPrompt(
++    bool can_pin_to_taskbar) {
++  if (!shell_ || !show_default_browser_prompt_) {
++    return false;
++  }
++  show_default_browser_prompt_(shell_, can_pin_to_taskbar ? TRUE : FALSE);
 +  return true;
 +}
 +
@@ -1257,13 +1322,22 @@ new file mode 100644
 +          base::EscapeQueryParamValue(site, /*use_plus=*/false)));
 +      break;
 +    }
++    case WCS_COMMAND_SET_DEFAULT_BROWSER:
++      ExecuteBrowserCommand(IDC_SET_BROWSER_AS_DEFAULT);
++      break;
++    case WCS_COMMAND_DISMISS_DEFAULT_BROWSER:
++      chrome::startup::default_prompt::UpdatePrefsForDismissedPrompt(
++          browser_->profile());
++      DefaultBrowserPromptManager::GetInstance()->CloseAllPrompts(
++          DefaultBrowserPromptManager::CloseReason::kDismiss);
++      break;
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,98 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1307,6 +1381,7 @@ new file mode 100644
 +  void SetVisible(bool visible);
 +  void ShowFind();
 +  bool ShowRestorePrompt();
++  bool ShowDefaultBrowserPrompt(bool can_pin_to_taskbar);
 +
 + private:
 +  using GetApiVersionFn = uint32_t(__stdcall*)();
@@ -1319,6 +1394,7 @@ new file mode 100644
 +  using SetVisibleFn = void(__stdcall*)(WcsShellHandle, BOOL);
 +  using ShowFindFn = void(__stdcall*)(WcsShellHandle);
 +  using ShowRestorePromptFn = void(__stdcall*)(WcsShellHandle);
++  using ShowDefaultBrowserPromptFn = void(__stdcall*)(WcsShellHandle, BOOL);
 +
 +  static void __stdcall InvokeCommandThunk(void* context,
 +                                           const WcsCommandArgs* args);
@@ -1351,6 +1427,7 @@ new file mode 100644
 +  SetVisibleFn set_visible_ = nullptr;
 +  ShowFindFn show_find_ = nullptr;
 +  ShowRestorePromptFn show_restore_prompt_ = nullptr;
++  ShowDefaultBrowserPromptFn show_default_browser_prompt_ = nullptr;
 +  std::vector<HistoryEntry> history_entries_;
 +  base::CancelableTaskTracker history_task_tracker_;
 +  bool history_query_started_ = false;
@@ -1363,7 +1440,7 @@ diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrom
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,168 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1378,7 +1455,7 @@ new file mode 100644
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 10u
++#define WCS_API_VERSION 11u
 +
 +typedef void* WcsShellHandle;
 +
@@ -1428,6 +1505,8 @@ new file mode 100644
 +  WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
 +  WCS_COMMAND_SAVE_BOOKMARK = 53,
 +  WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
++  WCS_COMMAND_SET_DEFAULT_BROWSER = 55,
++  WCS_COMMAND_DISMISS_DEFAULT_BROWSER = 56,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {

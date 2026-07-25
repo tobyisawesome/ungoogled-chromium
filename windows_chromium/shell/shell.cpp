@@ -2569,6 +2569,13 @@ void Shell::SetVisible(bool visible) {
 }
 
 void Shell::ShowRestorePrompt() {
+  if (restore_dialog_) {
+    return;
+  }
+  if (default_browser_dialog_) {
+    pending_restore_prompt_ = true;
+    return;
+  }
   restore_dialog_ = ContentDialog{};
   restore_dialog_.XamlRoot(root_.XamlRoot());
   restore_dialog_.Title(winrt::box_value(L"Restore pages?"));
@@ -2593,7 +2600,69 @@ void Shell::ShowRestorePrompt() {
   restore_dialog_.PrimaryButtonClick([this](const auto&, const auto&) {
     Invoke(WCS_COMMAND_RESTORE_SESSION);
   });
+  restore_dialog_.Closed([this](const auto&, const auto&) {
+    restore_dialog_ = nullptr;
+    if (pending_default_browser_prompt_) {
+      const bool can_pin = pending_default_browser_can_pin_;
+      pending_default_browser_prompt_ = false;
+      ShowDefaultBrowserPrompt(can_pin);
+    }
+  });
   restore_dialog_.ShowAsync();
+}
+
+void Shell::ShowDefaultBrowserPrompt(bool can_pin_to_taskbar) {
+  if (default_browser_dialog_) {
+    return;
+  }
+  if (restore_dialog_) {
+    pending_default_browser_prompt_ = true;
+    pending_default_browser_can_pin_ = can_pin_to_taskbar;
+    return;
+  }
+
+  default_browser_dialog_ = ContentDialog{};
+  default_browser_dialog_.XamlRoot(root_.XamlRoot());
+  default_browser_dialog_.Title(
+      winrt::box_value(L"Make Curve Browser your default browser?"));
+  default_browser_dialog_.PrimaryButtonText(L"Set as default");
+  default_browser_dialog_.CloseButtonText(L"Not now");
+  default_browser_dialog_.DefaultButton(ContentDialogButton::Primary);
+
+  StackPanel content;
+  content.Spacing(12);
+  FontIcon icon;
+  icon.Glyph(L"\uE774");
+  icon.FontSize(28);
+  icon.HorizontalAlignment(HorizontalAlignment::Left);
+  content.Children().Append(icon);
+
+  TextBlock message;
+  message.Text(can_pin_to_taskbar
+                   ? L"Use Curve Browser for web links and keep it easy to "
+                     L"reach from your Windows taskbar."
+                   : L"Use Curve Browser whenever you open web links in "
+                     L"Windows.");
+  message.TextWrapping(winrt::Microsoft::UI::Xaml::TextWrapping::Wrap);
+  content.Children().Append(message);
+  default_browser_dialog_.Content(content);
+
+  default_browser_dialog_.PrimaryButtonClick(
+      [this](const auto&, const auto&) {
+        Invoke(WCS_COMMAND_SET_DEFAULT_BROWSER);
+      });
+  default_browser_dialog_.CloseButtonClick(
+      [this](const auto&, const auto&) {
+        Invoke(WCS_COMMAND_DISMISS_DEFAULT_BROWSER);
+      });
+  default_browser_dialog_.Closed([this](const auto&, const auto&) {
+    default_browser_dialog_ = nullptr;
+    if (pending_restore_prompt_) {
+      pending_restore_prompt_ = false;
+      ShowRestorePrompt();
+    }
+  });
+  default_browser_dialog_.ShowAsync();
 }
 
 HRESULT Shell::Capture(const wchar_t* output_path) {
@@ -3091,6 +3160,15 @@ extern "C" void __stdcall WcsShowFind(WcsShellHandle shell) {
 extern "C" void __stdcall WcsShowRestorePrompt(WcsShellHandle shell) {
   if (shell) {
     static_cast<windows_chromium::Shell*>(shell)->ShowRestorePrompt();
+  }
+}
+
+extern "C" void __stdcall WcsShowDefaultBrowserPrompt(
+    WcsShellHandle shell,
+    BOOL can_pin_to_taskbar) {
+  if (shell) {
+    static_cast<windows_chromium::Shell*>(shell)->ShowDefaultBrowserPrompt(
+        can_pin_to_taskbar != FALSE);
   }
 }
 

@@ -56,6 +56,7 @@ class Shell final {
   void ShowBookmarkFlyout();
   void ShowSiteInfoFlyout();
   void ShowRestorePrompt();
+  void ShowDefaultBrowserPrompt(bool can_pin_to_taskbar);
   void SetVisualStateForTesting(std::wstring_view state);
   HRESULT Capture(const wchar_t* output_path);
   int32_t ShowContextMenu(const WcsContextMenuItem* items,
@@ -183,6 +184,9 @@ class Shell final {
   std::vector<NativeHistoryEntry> native_history_;
   std::vector<NativeDownload> native_downloads_;
   bool history_loading_ = false;
+  bool pending_restore_prompt_ = false;
+  bool pending_default_browser_prompt_ = false;
+  bool pending_default_browser_can_pin_ = false;
 
   winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{
       nullptr};
@@ -216,6 +220,8 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Controls::TextBox bookmark_title_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::ContentDialog
       restore_dialog_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::ContentDialog
+      default_browser_dialog_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox find_box_{nullptr};
   ToolbarButton back_button_{nullptr};
   ToolbarButton forward_button_{nullptr};

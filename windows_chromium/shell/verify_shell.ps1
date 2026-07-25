@@ -69,6 +69,27 @@ function Find-DescendantByNamePrefix {
   return $null
 }
 
+function Wait-DescendantByName {
+  param(
+    [System.Windows.Automation.AutomationElement]$Root,
+    [string]$Name,
+    [int]$TimeoutSeconds = 10
+  )
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try {
+      $element = Find-DescendantByName -Root $Root -Name $Name
+      if ($element) {
+        return $element
+      }
+    } catch [System.Windows.Automation.ElementNotAvailableException] {
+      return $null
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
+  return $null
+}
+
 function Find-ProcessElementByName {
   param(
     [int]$ProcessId,
@@ -138,6 +159,81 @@ function Find-TabByName {
   ))
   $Root.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Test-NativePopup {
+  param(
+    [string]$Option,
+    [string[]]$ExpectedNames
+  )
+
+  $popupProcess = Start-Process -FilePath $preview -WorkingDirectory $output `
+    -ArgumentList $Option -PassThru
+  try {
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+      Start-Sleep -Milliseconds 250
+      $popupProcess.Refresh()
+    } while ($popupProcess.MainWindowHandle -eq 0 -and
+             -not $popupProcess.HasExited -and
+             (Get-Date) -lt $deadline)
+
+    if ($popupProcess.HasExited -or $popupProcess.MainWindowHandle -eq 0) {
+      throw "$Option preview did not create a window."
+    }
+    $popupRoot = [System.Windows.Automation.AutomationElement]::FromHandle(
+      [IntPtr]$popupProcess.MainWindowHandle)
+    foreach ($name in $ExpectedNames) {
+      $element = Wait-DescendantByName -Root $popupRoot -Name $name
+      if (-not $element) {
+        throw "$Option did not expose its native '$name' control."
+      }
+    }
+    Write-Output "Curve Browser $Option popup verification passed (PID $($popupProcess.Id))."
+  } finally {
+    if (-not $popupProcess.HasExited) {
+      Stop-Process -Id $popupProcess.Id -Force
+    }
+  }
+}
+
+function Test-NativePromptQueue {
+  $queueProcess = Start-Process -FilePath $preview -WorkingDirectory $output `
+    -ArgumentList '--prompt-race' -PassThru
+  try {
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+      Start-Sleep -Milliseconds 250
+      $queueProcess.Refresh()
+    } while ($queueProcess.MainWindowHandle -eq 0 -and
+             -not $queueProcess.HasExited -and
+             (Get-Date) -lt $deadline)
+    if ($queueProcess.HasExited -or $queueProcess.MainWindowHandle -eq 0) {
+      throw 'Prompt-queue preview did not create a window.'
+    }
+
+    $queueRoot = [System.Windows.Automation.AutomationElement]::FromHandle(
+      [IntPtr]$queueProcess.MainWindowHandle)
+    if (-not (Wait-DescendantByName -Root $queueRoot `
+        -Name 'Restore pages?')) {
+      throw 'Crash recovery did not receive first priority in the prompt queue.'
+    }
+    $notNow = Wait-DescendantByName -Root $queueRoot -Name 'Not now'
+    if (-not $notNow) {
+      throw 'Crash-recovery prompt is missing its Not now action.'
+    }
+    $notNow.GetCurrentPattern(
+      [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    if (-not (Wait-DescendantByName -Root $queueRoot `
+        -Name 'Make Curve Browser your default browser?')) {
+      throw 'Default-browser prompt did not open after crash recovery closed.'
+    }
+    Write-Output "Curve Browser native prompt queue verification passed (PID $($queueProcess.Id))."
+  } finally {
+    if (-not $queueProcess.HasExited) {
+      Stop-Process -Id $queueProcess.Id -Force
+    }
+  }
 }
 
 $process = Start-Process -FilePath $preview -WorkingDirectory $output -PassThru
@@ -374,6 +470,18 @@ try {
     Stop-Process -Id $downloadsProcess.Id -Force
   }
 }
+
+Test-NativePopup -Option '--find' `
+  -ExpectedNames @('Find on page', 'Previous result', 'Next result', 'Close find')
+Test-NativePopup -Option '--restore-prompt' `
+  -ExpectedNames @('Restore pages?', 'Restore', 'Not now')
+Test-NativePopup -Option '--default-browser-prompt' `
+  -ExpectedNames @(
+    'Make Curve Browser your default browser?',
+    'Set as default',
+    'Not now'
+  )
+Test-NativePromptQueue
 
 & (Join-Path $PSScriptRoot 'verify_visuals.ps1') `
   -OutputDirectory $output

@@ -21,6 +21,9 @@ using UpdateWindowState = HRESULT(__stdcall*)(WcsShellHandle,
 using CaptureShell = HRESULT(__stdcall*)(WcsShellHandle, const wchar_t*);
 using SetVisualStateForTesting = void(__stdcall*)(WcsShellHandle,
                                                   const wchar_t*);
+using ShowFind = void(__stdcall*)(WcsShellHandle);
+using ShowRestorePrompt = void(__stdcall*)(WcsShellHandle);
+using ShowDefaultBrowserPrompt = void(__stdcall*)(WcsShellHandle, BOOL);
 
 HMODULE g_shell_module = nullptr;
 WcsShellHandle g_shell = nullptr;
@@ -28,6 +31,9 @@ UpdateWindowState g_update = nullptr;
 DestroyShell g_destroy = nullptr;
 CaptureShell g_capture = nullptr;
 SetVisualStateForTesting g_set_visual_state = nullptr;
+ShowFind g_show_find = nullptr;
+ShowRestorePrompt g_show_restore_prompt = nullptr;
+ShowDefaultBrowserPrompt g_show_default_browser_prompt = nullptr;
 std::wstring g_capture_path;
 
 constexpr int kShellHeightDip = 96;
@@ -42,6 +48,9 @@ bool g_restore_on_startup = true;
 bool g_page_bookmarked = false;
 std::wstring g_download_action_status = L"Completed";
 std::wstring g_visual_state;
+bool g_open_find = false;
+bool g_open_restore_prompt = false;
+bool g_open_default_browser_prompt = false;
 
 void PushState() {
   std::array<WcsTabState, 3> tabs{};
@@ -167,6 +176,20 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
         if (g_set_visual_state && g_shell) {
           g_set_visual_state(g_shell, g_visual_state.c_str());
         }
+      } else if (wparam == 3) {
+        // Wait until the island has a live XamlRoot before opening a popup.
+        // ContentDialog and Flyout deliberately reject an unattached root.
+        KillTimer(window, 3);
+        if (g_open_find && g_show_find && g_shell) {
+          g_show_find(g_shell);
+        }
+        if (g_open_restore_prompt && g_show_restore_prompt && g_shell) {
+          g_show_restore_prompt(g_shell);
+        }
+        if (g_open_default_browser_prompt &&
+            g_show_default_browser_prompt && g_shell) {
+          g_show_default_browser_prompt(g_shell, TRUE);
+        }
       }
       return 0;
     case WM_PAINT: {
@@ -249,12 +272,21 @@ int wmain(int argc, wchar_t** argv) {
       GetProcAddress(g_shell_module, "WcsCaptureShell"));
   g_set_visual_state = reinterpret_cast<SetVisualStateForTesting>(
       GetProcAddress(g_shell_module, "WcsSetVisualStateForTesting"));
+  g_show_find = reinterpret_cast<ShowFind>(
+      GetProcAddress(g_shell_module, "WcsShowFind"));
+  g_show_restore_prompt = reinterpret_cast<ShowRestorePrompt>(
+      GetProcAddress(g_shell_module, "WcsShowRestorePrompt"));
+  g_show_default_browser_prompt =
+      reinterpret_cast<ShowDefaultBrowserPrompt>(
+          GetProcAddress(g_shell_module, "WcsShowDefaultBrowserPrompt"));
   g_update = reinterpret_cast<UpdateWindowState>(
       GetProcAddress(g_shell_module, "WcsUpdateWindowState"));
   g_destroy = reinterpret_cast<DestroyShell>(
       GetProcAddress(g_shell_module, "WcsDestroyShell"));
   if (!get_version || get_version() != WCS_API_VERSION || !create ||
-      !g_update || !g_destroy || !g_capture || !g_set_visual_state) {
+      !g_update || !g_destroy || !g_capture || !g_set_visual_state ||
+      !g_show_find || !g_show_restore_prompt ||
+      !g_show_default_browser_prompt) {
     std::fwprintf(stderr, L"Shell API mismatch\n");
     return ERROR_REVISION_MISMATCH;
   }
@@ -326,12 +358,25 @@ int wmain(int argc, wchar_t** argv) {
       g_visual_state = L"unselected-pressed";
     } else if (_wcsicmp(option, L"--hover-add") == 0) {
       g_visual_state = L"add-pointer-over";
+    } else if (_wcsicmp(option, L"--find") == 0) {
+      g_open_find = true;
+    } else if (_wcsicmp(option, L"--restore-prompt") == 0) {
+      g_open_restore_prompt = true;
+    } else if (_wcsicmp(option, L"--default-browser-prompt") == 0) {
+      g_open_default_browser_prompt = true;
+    } else if (_wcsicmp(option, L"--prompt-race") == 0) {
+      g_open_restore_prompt = true;
+      g_open_default_browser_prompt = true;
     }
   }
   PushState();
 
   ShowWindow(window, SW_SHOWDEFAULT);
   UpdateWindow(window);
+  if (g_open_find || g_open_restore_prompt ||
+      g_open_default_browser_prompt) {
+    SetTimer(window, 3, 500, nullptr);
+  }
   if (!g_visual_state.empty()) {
     SetTimer(window, 2, 350, nullptr);
   }
