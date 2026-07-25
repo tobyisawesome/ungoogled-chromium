@@ -9,6 +9,7 @@ $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $preview = Join-Path $output 'CurveBrowserShellPreview.exe'
 $manifest = Join-Path $output 'curve_browser_payload_manifest.txt'
 $requiredPayload = @(
+  'chrome.pri',
   'curve_browser_shell.dll',
   'curve_browser_shell.pri',
   'CurveBrowserShell.winmd'
@@ -22,6 +23,11 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
 }
 
 $payload = Get-Content -LiteralPath $manifest
+$duplicatePayload = @($payload | Group-Object | Where-Object Count -gt 1)
+if ($duplicatePayload.Count -ne 0) {
+  $duplicates = ($duplicatePayload | ForEach-Object Name) -join ', '
+  throw "Payload manifest contains duplicate entries: $duplicates"
+}
 foreach ($name in $requiredPayload) {
   if ($name -notin $payload) {
     throw "Payload manifest is missing $name"
@@ -33,6 +39,7 @@ foreach ($name in $requiredPayload) {
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
 
 function Find-DescendantByName {
   param(
@@ -59,6 +66,44 @@ function Find-DescendantByNamePrefix {
       return $element
     }
   }
+  return $null
+}
+
+function Find-ProcessElementByName {
+  param(
+    [int]$ProcessId,
+    [string]$Name
+  )
+  $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+  $condition = [System.Windows.Automation.AndCondition]::new(@(
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+      $ProcessId),
+    [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+  ))
+  $desktop.FindFirst(
+    [System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Wait-ProcessElementByName {
+  param(
+    [int]$ProcessId,
+    [string]$Name,
+    [int]$TimeoutSeconds = 5
+  )
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try {
+      $element = Find-ProcessElementByName -ProcessId $ProcessId -Name $Name
+      if ($element) {
+        return $element
+      }
+    } catch [System.Windows.Automation.ElementNotAvailableException] {
+      # A flyout may replace its popup HWND while its opening animation runs.
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
   return $null
 }
 
@@ -147,6 +192,8 @@ try {
     if ((Get-SelectedTabName -Root $root) -ne $initialTab) {
       throw "$flyoutButtonName dispatched a navigation command while opening."
     }
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 150
   }
 
   $loadingTab = Find-TabByName -Root $root -Name 'WinUI 3 documentation'
@@ -193,6 +240,47 @@ try {
   }
   if (-not (Find-DescendantByName -Root $root -Name 'Manage search engine')) {
     throw 'The Chromium search settings entry point is missing.'
+  }
+
+  $firstSelection.Select()
+  Start-Sleep -Milliseconds 300
+  $favorite = Find-DescendantByName -Root $root `
+    -Name 'Add this page to favorites'
+  $favorite.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  if (-not (Wait-ProcessElementByName -ProcessId $process.Id `
+      -Name 'Favorite added')) {
+    throw 'The native favorite flyout did not open.'
+  }
+  $done = Wait-ProcessElementByName -ProcessId $process.Id -Name 'Done'
+  if (-not $done) {
+    throw 'The native favorite flyout did not expose its Done button.'
+  }
+  $done.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 300
+  if (-not (Find-DescendantByName -Root $root -Name 'Edit favorite')) {
+    throw 'The native favorite flyout did not save through the host API.'
+  }
+
+  $siteInfo = Find-DescendantByName -Root $root `
+    -Name 'Connection is secure'
+  $siteInfo.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  $siteSettings = Wait-ProcessElementByName -ProcessId $process.Id `
+    -Name 'Site settings'
+  if (-not $siteSettings) {
+    throw 'The native site-information flyout did not open.'
+  }
+  $siteSettings.GetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+  Start-Sleep -Milliseconds 300
+  $address = Find-DescendantByName -Root $root `
+    -Name 'Search or enter an address'
+  $value = $address.GetCurrentPattern(
+    [System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+  if ($value -ne 'chrome://settings/content/siteDetails') {
+    throw 'Native site settings did not round-trip through the host API.'
   }
 
   Write-Output "Curve Browser WinUI shell verification passed (PID $($process.Id))."
@@ -286,3 +374,6 @@ try {
     Stop-Process -Id $downloadsProcess.Id -Force
   }
 }
+
+& (Join-Path $PSScriptRoot 'verify_visuals.ps1') `
+  -OutputDirectory $output

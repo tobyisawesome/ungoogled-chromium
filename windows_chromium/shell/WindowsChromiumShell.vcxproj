@@ -96,7 +96,7 @@
   <Target Name="WriteCurveBrowserPayloadManifest" AfterTargets="Build">
     <ItemGroup>
       <CurveBrowserTopLevelPayload Include="$(OutDir)*.dll;$(OutDir)*.pri;$(OutDir)*.xbf;$(OutDir)*.winmd;$(OutDir)App.xaml;$(OutDir)RestartAgent.exe" />
-      <CurveBrowserTopLevelPayload Remove="$(OutDir)CurveBrowserShellPreview.*;$(OutDir)WindowsChromiumShellPreview.*;$(OutDir)windows_chromium_shell.*" />
+      <CurveBrowserTopLevelPayload Remove="$(OutDir)chrome.pri;$(OutDir)CurveBrowserShellPreview.*;$(OutDir)WindowsChromiumShellPreview.*;$(OutDir)windows_chromium_shell.*" />
       <CurveBrowserMuiPayload Include="$(OutDir)**\*.mui" />
       <CurveBrowserAssetPayload Include="$(OutDir)Microsoft.UI.Xaml\Assets\*" />
     </ItemGroup>

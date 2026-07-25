@@ -25,6 +25,94 @@
                     </Setter.Value>
                 </Setter>
             </Style>
+
+            <!-- Match the compact button built into AutoSuggestBox. The outer
+                 32 x 28 target preserves a reliable pointer target while the
+                 1 x 3 inset produces the 30 x 22 hover plate used by WinUI's
+                 QueryButton. Keeping this as a template avoids shrinking and
+                 clipping the stock Button presenter. -->
+            <Style x:Key="CurveOmniboxButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="32" />
+                <Setter Property="Height" Value="28" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background"
+                        Value="{ThemeResource TextControlButtonBackground}" />
+                <Setter Property="BorderBrush"
+                        Value="{ThemeResource TextControlButtonBorderBrush}" />
+                <Setter Property="Foreground"
+                        Value="{ThemeResource TextControlButtonForeground}" />
+                <Setter Property="CornerRadius"
+                        Value="{ThemeResource ControlCornerRadius}" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="UseSystemFocusVisuals" Value="True" />
+                <Setter Property="FocusVisualMargin" Value="-1" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <ContentPresenter
+                                x:Name="ContentPresenter"
+                                Margin="1,3"
+                                Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                ContentTransitions="{TemplateBinding ContentTransitions}"
+                                Foreground="{TemplateBinding Foreground}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                Control.IsTemplateFocusTarget="True"
+                                AutomationProperties.AccessibilityView="Raw">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal" />
+                                        <VisualState x:Name="PointerOver">
+                                            <VisualState.Setters>
+                                                <Setter Target="ContentPresenter.Background"
+                                                        Value="{ThemeResource TextControlButtonBackgroundPointerOver}" />
+                                                <Setter Target="ContentPresenter.BorderBrush"
+                                                        Value="{ThemeResource TextControlButtonBorderBrushPointerOver}" />
+                                                <Setter Target="ContentPresenter.Foreground"
+                                                        Value="{ThemeResource TextControlButtonForegroundPointerOver}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <VisualState.Setters>
+                                                <Setter Target="ContentPresenter.Background"
+                                                        Value="{ThemeResource TextControlButtonBackgroundPressed}" />
+                                                <Setter Target="ContentPresenter.BorderBrush"
+                                                        Value="{ThemeResource TextControlButtonBorderBrushPressed}" />
+                                                <Setter Target="ContentPresenter.Foreground"
+                                                        Value="{ThemeResource TextControlButtonForegroundPressed}" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <VisualState.Setters>
+                                                <Setter Target="ContentPresenter.Opacity" Value="0" />
+                                            </VisualState.Setters>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </ContentPresenter>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- AutoSuggestBox does not forward its Padding property to the
+                 nested TextBox. Supplying the inset as the TextBox style makes
+                 the first frame use the same geometry as every later frame. -->
+            <Style x:Key="CurveOmniboxTextBoxStyle"
+                   TargetType="TextBox"
+                   BasedOn="{StaticResource AutoSuggestBoxTextBoxStyle}">
+                <Setter Property="Padding" Value="42,5,42,6" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

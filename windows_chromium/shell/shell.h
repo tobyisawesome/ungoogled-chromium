@@ -4,6 +4,7 @@
 #ifndef WINDOWS_CHROMIUM_SHELL_SHELL_H_
 #define WINDOWS_CHROMIUM_SHELL_SHELL_H_
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <set>
@@ -52,7 +53,10 @@ class Shell final {
   HRESULT Update(const WcsWindowState& state);
   void SetVisible(bool visible);
   void ShowFindFlyout();
+  void ShowBookmarkFlyout();
+  void ShowSiteInfoFlyout();
   void ShowRestorePrompt();
+  void SetVisualStateForTesting(std::wstring_view state);
   HRESULT Capture(const wchar_t* output_path);
   int32_t ShowContextMenu(const WcsContextMenuItem* items,
                           size_t item_count,
@@ -94,6 +98,7 @@ class Shell final {
   void ToggleWorkAreaMaximize();
   void UpdateMaximizeGlyph();
   void UpdateNativePage(std::wstring_view url);
+  void UpdateTitleBarMetrics();
   void ResizeIsland();
   void UpdateWindowRegion();
   void ApplySystemTheme();
@@ -101,7 +106,9 @@ class Shell final {
   std::wstring NativePageTitle(std::wstring_view url) const;
   void AttachWindowSubclass();
   void DetachWindowSubclass();
-  winrt::fire_and_forget CaptureAsync(std::wstring output_path);
+  static winrt::fire_and_forget CaptureAsync(
+      winrt::Microsoft::UI::Xaml::Controls::Grid root,
+      std::wstring output_path);
 
   static LRESULT CALLBACK ParentSubclassProc(HWND window,
                                               UINT message,
@@ -123,6 +130,7 @@ class Shell final {
   bool updating_ = false;
   bool address_editing_ = false;
   bool suppress_address_suggestions_ = false;
+  bool address_submission_pending_ = false;
   bool native_page_visible_ = false;
   bool bookmark_bar_visible_ = false;
   bool sidebar_visible_ = false;
@@ -130,13 +138,27 @@ class Shell final {
   bool restore_on_startup_ = false;
   bool tab_chrome_update_queued_ = false;
   bool new_tab_request_pending_ = false;
+  bool tab_keyboard_focus_visible_ = false;
   bool island_hidden_for_window_transition_ = false;
+  bool native_title_bar_suppressed_ = false;
   bool work_area_maximized_ = false;
   RECT restored_window_bounds_{};
   size_t last_tab_count_ = 0;
   int32_t active_index_ = -1;
   int64_t active_tab_id_ = -1;
+  int64_t focused_tab_id_ = -1;
+  int32_t pending_focus_tab_index_ = -1;
+  int64_t pending_focus_tab_id_ = -1;
   std::wstring active_url_;
+  std::wstring active_title_;
+  std::wstring submitted_address_text_;
+  bool active_page_bookmarked_ = false;
+
+  struct CallbackLifetime {
+    std::atomic_bool alive{true};
+  };
+  std::shared_ptr<CallbackLifetime> callback_lifetime_ =
+      std::make_shared<CallbackLifetime>();
 
   struct NativeBookmark {
     std::wstring title;
@@ -164,15 +186,22 @@ class Shell final {
 
   winrt::Microsoft::UI::Xaml::Hosting::DesktopWindowXamlSource xaml_source_{
       nullptr};
+  winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer
+      focus_content_timer_{nullptr};
   winrt::Microsoft::UI::Windowing::AppWindowTitleBar title_bar_{nullptr};
+  winrt::Microsoft::UI::Windowing::OverlappedPresenter
+      overlapped_presenter_{nullptr};
   winrt::Microsoft::UI::Input::InputNonClientPointerSource
       non_client_pointer_source_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid root_{nullptr};
   winrt::Microsoft::UI::Xaml::Media::Brush selected_tab_fill_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TabView tab_view_{nullptr};
-  winrt::Microsoft::UI::Xaml::Controls::Canvas tab_shoulder_layer_{nullptr};
-  winrt::Microsoft::UI::Xaml::Shapes::Path left_tab_shoulder_{nullptr};
-  winrt::Microsoft::UI::Xaml::Shapes::Path right_tab_shoulder_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Canvas selected_tab_layer_{nullptr};
+  winrt::Microsoft::UI::Xaml::Shapes::Path selected_tab_path_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Canvas tab_focus_layer_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Border tab_focus_border_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::ScrollViewer
+      tab_scroll_viewer_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid toolbar_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Border bookmark_divider_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid bookmark_bar_{nullptr};
@@ -182,6 +211,9 @@ class Shell final {
   winrt::Microsoft::UI::Xaml::Controls::AutoSuggestBox address_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Grid native_page_host_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::Flyout find_flyout_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Flyout bookmark_flyout_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::Flyout site_info_flyout_{nullptr};
+  winrt::Microsoft::UI::Xaml::Controls::TextBox bookmark_title_box_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::ContentDialog
       restore_dialog_{nullptr};
   winrt::Microsoft::UI::Xaml::Controls::TextBox find_box_{nullptr};
@@ -198,8 +230,10 @@ class Shell final {
   MenuFlyout profile_menu_{nullptr};
   MenuFlyout app_menu_{nullptr};
   std::map<int64_t, TabViewItem> tab_items_;
+  std::map<int64_t, std::wstring> tab_titles_;
   std::map<int64_t, std::wstring> tab_favicon_urls_;
   std::set<int64_t> tab_audio_icons_;
+  std::map<int64_t, bool> tab_audio_muted_;
   std::vector<std::wstring> tab_suggestions_;
   std::map<int64_t, winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem>
       tab_pin_menu_items_;

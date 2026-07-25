@@ -1,10 +1,12 @@
-description: bundle the official uBlock Origin CRX for new Curve Browser profiles
+description: bundle and load the official uBlock Origin CRX for Curve Browser profiles
 author: Curve Browser Authors
 
 ---
  chrome/browser/extensions/default_extensions/BUILD.gn                 | 2 +-
- chrome/browser/extensions/default_extensions/external_extensions.json | 4 ++++
- 2 files changed, 5 insertions(+), 1 deletion(-)
+ chrome/browser/extensions/default_extensions/external_extensions.json | 6 +++++-
+ chrome/browser/extensions/external_provider_impl.cc                   | 22 ++++++++++++++++++++++
+ chrome/browser/extensions/external_provider_manager.cc                | 3 +++
+ 4 files changed, 31 insertions(+), 2 deletions(-)
 
 --- a/chrome/browser/extensions/default_extensions/BUILD.gn
 +++ b/chrome/browser/extensions/default_extensions/BUILD.gn
@@ -28,3 +30,60 @@ author: Curve Browser Authors
 +    "external_version": "1.72.2"
 +  }
 +}
+--- a/chrome/browser/extensions/external_provider_impl.cc
++++ b/chrome/browser/extensions/external_provider_impl.cc
+@@ -805,6 +805,10 @@ void ExternalProviderImpl::CreateExternalProviders(
+ #endif
+   int bundled_extension_creation_flags = Extension::NO_FLAGS;
+ #endif
++#if BUILDFLAG(IS_WIN)
++  int bundled_extension_creation_flags =
++      Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT;
++#endif
+ #if BUILDFLAG(IS_CHROMEOS)
+   bundled_extension_creation_flags = Extension::FROM_WEBSTORE |
+       Extension::WAS_INSTALLED_BY_DEFAULT;
+@@ -854,6 +858,24 @@ void ExternalProviderImpl::CreateExternalProviders(
+         ManifestLocation::kExternalPrefDownload, Extension::NO_FLAGS);
+     registry_provider->set_allow_updates(true);
+     provider_list->push_back(std::move(registry_provider));
++
++    // Curve Browser ships trusted default extensions beside the executable.
++    // Chromium's Windows provider normally checks only the registry, leaving
++    // the external_extensions.json payload copied by default_extensions
++    // unused. Load that payload explicitly so portable builds behave the same
++    // way as installed builds without writing machine or user registry keys.
++    auto bundled_provider = std::make_unique<ExternalProviderImpl>(
++        service,
++        base::MakeRefCounted<ExternalPrefLoader>(
++            chrome::DIR_EXTERNAL_EXTENSIONS, ExternalPrefLoader::NONE,
++            nullptr),
++        profile, ManifestLocation::kExternalPref,
++        ManifestLocation::kExternalPrefDownload,
++        bundled_extension_creation_flags);
++    bundled_provider->set_auto_acknowledge(true);
++    bundled_provider->set_install_immediately(true);
++    bundled_provider->set_allow_updates(true);
++    provider_list->push_back(std::move(bundled_provider));
+ #else
+     provider_list->push_back(std::make_unique<ExternalProviderImpl>(
+         service,
+--- a/chrome/browser/extensions/external_provider_manager.cc
++++ b/chrome/browser/extensions/external_provider_manager.cc
+@@ -11,6 +11,7 @@
+ #include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/notimplemented.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/version.h"
+ #include "build/build_config.h"
+@@ -489,6 +490,8 @@ void ExternalProviderManager::InstallationFromExternalFileFinished(
+     const std::string& extension_id,
+     const std::optional<CrxInstallError>& error) {
+   if (error != std::nullopt) {
++    LOG(ERROR) << "Failed to install external extension " << extension_id
++               << ": " << base::UTF16ToUTF8(error->message());
+     // When installation is finished, the extension should not remain in the
+     // pending extension manager. For successful installations this is done
+     // in OnExtensionInstalled handler.

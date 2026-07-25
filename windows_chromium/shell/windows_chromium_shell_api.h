@@ -14,7 +14,7 @@
 #define WCS_EXPORT __declspec(dllimport)
 #endif
 
-#define WCS_API_VERSION 9u
+#define WCS_API_VERSION 10u
 
 typedef void* WcsShellHandle;
 
@@ -62,6 +62,8 @@ typedef enum WcsCommand {
   WCS_COMMAND_RESTORE_SESSION = 50,
   WCS_COMMAND_OPEN_DOWNLOAD = 51,
   WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
+  WCS_COMMAND_SAVE_BOOKMARK = 53,
+  WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
 } WcsCommand;
 
 typedef struct WcsCommandArgs {
@@ -142,6 +144,7 @@ typedef struct WcsWindowState {
   int32_t history_loading;
   const WcsDownloadState* downloads;
   size_t download_count;
+  int32_t active_page_bookmarked;
 } WcsWindowState;
 
 typedef enum WcsContextMenuItemType {
@@ -183,6 +186,11 @@ WCS_EXPORT void __stdcall WcsShowRestorePrompt(WcsShellHandle shell);
 // The operation is asynchronous; callers may watch for the output file.
 WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
                                              const wchar_t* output_path);
+// Deterministic preview-only visual-state hook. Chromium never calls this;
+// the shell harness uses it for hover/pressed visual regression captures.
+WCS_EXPORT void __stdcall WcsSetVisualStateForTesting(
+    WcsShellHandle shell,
+    const wchar_t* state);
 // Displays a WinUI MenuFlyout at a client-window screen coordinate and
 // returns its selected Chromium command id, or -1 when dismissed.
 WCS_EXPORT int32_t __stdcall WcsShowContextMenu(

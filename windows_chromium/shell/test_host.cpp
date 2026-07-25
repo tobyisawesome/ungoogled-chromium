@@ -19,12 +19,15 @@ using DestroyShell = void(__stdcall*)(WcsShellHandle);
 using UpdateWindowState = HRESULT(__stdcall*)(WcsShellHandle,
                                               const WcsWindowState*);
 using CaptureShell = HRESULT(__stdcall*)(WcsShellHandle, const wchar_t*);
+using SetVisualStateForTesting = void(__stdcall*)(WcsShellHandle,
+                                                  const wchar_t*);
 
 HMODULE g_shell_module = nullptr;
 WcsShellHandle g_shell = nullptr;
 UpdateWindowState g_update = nullptr;
 DestroyShell g_destroy = nullptr;
 CaptureShell g_capture = nullptr;
+SetVisualStateForTesting g_set_visual_state = nullptr;
 std::wstring g_capture_path;
 
 constexpr int kShellHeightDip = 96;
@@ -36,7 +39,9 @@ std::array<std::wstring, 3> g_urls = {
     L"chrome://settings/"};
 int g_active = 0;
 bool g_restore_on_startup = true;
+bool g_page_bookmarked = false;
 std::wstring g_download_action_status = L"Completed";
+std::wstring g_visual_state;
 
 void PushState() {
   std::array<WcsTabState, 3> tabs{};
@@ -88,7 +93,8 @@ void PushState() {
                        g_restore_on_startup ? 1 : 0, bookmarks.data(),
                        bookmarks.size(), 1, bookmark_library.data(),
                        bookmark_library.size(), history.data(), history.size(),
-                       0, downloads.data(), downloads.size()};
+                       0, downloads.data(), downloads.size(),
+                       g_page_bookmarked ? 1 : 0};
   if (g_update && g_shell) {
     g_update(g_shell, &state);
   }
@@ -133,6 +139,13 @@ void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
   } else if (args->command == WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER) {
     g_download_action_status = L"Folder requested";
     PushState();
+  } else if (args->command == WCS_COMMAND_SAVE_BOOKMARK) {
+    g_page_bookmarked = args->event_flags != 0;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_SITE_SETTINGS) {
+    g_urls[g_active] = L"chrome://settings/content/siteDetails";
+    g_titles[g_active] = L"Site settings";
+    PushState();
   }
 }
 
@@ -148,6 +161,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
         if (FAILED(result)) {
           std::fwprintf(stderr, L"WcsCaptureShell failed: 0x%08X\n",
                         static_cast<unsigned int>(result));
+        }
+      } else if (wparam == 2 && !g_visual_state.empty()) {
+        KillTimer(window, 2);
+        if (g_set_visual_state && g_shell) {
+          g_set_visual_state(g_shell, g_visual_state.c_str());
         }
       }
       return 0;
@@ -229,12 +247,14 @@ int wmain(int argc, wchar_t** argv) {
       GetProcAddress(g_shell_module, "WcsCreateShell"));
   g_capture = reinterpret_cast<CaptureShell>(
       GetProcAddress(g_shell_module, "WcsCaptureShell"));
+  g_set_visual_state = reinterpret_cast<SetVisualStateForTesting>(
+      GetProcAddress(g_shell_module, "WcsSetVisualStateForTesting"));
   g_update = reinterpret_cast<UpdateWindowState>(
       GetProcAddress(g_shell_module, "WcsUpdateWindowState"));
   g_destroy = reinterpret_cast<DestroyShell>(
       GetProcAddress(g_shell_module, "WcsDestroyShell"));
   if (!get_version || get_version() != WCS_API_VERSION || !create ||
-      !g_update || !g_destroy || !g_capture) {
+      !g_update || !g_destroy || !g_capture || !g_set_visual_state) {
     std::fwprintf(stderr, L"Shell API mismatch\n");
     return ERROR_REVISION_MISMATCH;
   }
@@ -247,34 +267,77 @@ int wmain(int argc, wchar_t** argv) {
                   static_cast<unsigned int>(result));
     return result;
   }
-  const int option_index =
-      argc > 2 ? 2 : (argc > 1 && wcsncmp(argv[1], L"--", 2) == 0 ? 1 : -1);
-  if (option_index > 0) {
-    g_active = 2;
-    if (_wcsicmp(argv[option_index], L"--profiles") == 0) {
+  int option_index = 1;
+  if (argc > 1 && wcsncmp(argv[1], L"--", 2) != 0) {
+    g_capture_path = argv[1];
+    option_index = 2;
+  }
+  for (int index = option_index; index < argc; ++index) {
+    const wchar_t* option = argv[index];
+    if (_wcsicmp(option, L"--profiles") == 0) {
+      g_active = 2;
       g_titles[g_active] = L"Profiles";
       g_urls[g_active] = L"chrome://settings/manageProfile";
-    } else if (_wcsicmp(argv[option_index], L"--about") == 0) {
+    } else if (_wcsicmp(option, L"--about") == 0) {
+      g_active = 2;
       g_titles[g_active] = L"About Curve Browser";
       g_urls[g_active] = L"chrome://settings/help";
-    } else if (_wcsicmp(argv[option_index], L"--bookmarks") == 0) {
+    } else if (_wcsicmp(option, L"--bookmarks") == 0) {
+      g_active = 2;
       g_titles[g_active] = L"Bookmarks";
       g_urls[g_active] = L"chrome://bookmarks/";
-    } else if (_wcsicmp(argv[option_index], L"--history") == 0) {
+    } else if (_wcsicmp(option, L"--history") == 0) {
+      g_active = 2;
       g_titles[g_active] = L"History";
       g_urls[g_active] = L"chrome://history/";
-    } else if (_wcsicmp(argv[option_index], L"--downloads") == 0) {
+    } else if (_wcsicmp(option, L"--downloads") == 0) {
+      g_active = 2;
       g_titles[g_active] = L"Downloads";
       g_urls[g_active] = L"chrome://downloads/";
+    } else if (_wcsicmp(option, L"--active-middle") == 0) {
+      g_active = 1;
+    } else if (_wcsicmp(option, L"--active-last") == 0) {
+      g_active = 2;
+    } else if (_wcsicmp(option, L"--hover-security") == 0) {
+      g_visual_state = L"security-pointer-over";
+    } else if (_wcsicmp(option, L"--press-security") == 0) {
+      g_visual_state = L"security-pressed";
+    } else if (_wcsicmp(option, L"--focus-security") == 0) {
+      g_visual_state = L"security-keyboard-focus";
+    } else if (_wcsicmp(option, L"--hover-favorite") == 0) {
+      g_visual_state = L"favorite-pointer-over";
+    } else if (_wcsicmp(option, L"--press-favorite") == 0) {
+      g_visual_state = L"favorite-pressed";
+    } else if (_wcsicmp(option, L"--focus-favorite") == 0) {
+      g_visual_state = L"favorite-keyboard-focus";
+    } else if (_wcsicmp(option, L"--focus-address") == 0) {
+      g_visual_state = L"address-keyboard-focus";
+    } else if (_wcsicmp(option, L"--focus-selected") == 0) {
+      g_visual_state = L"selected-keyboard-focus";
+    } else if (_wcsicmp(option, L"--visual-normal") == 0) {
+      g_visual_state = L"normal";
+    } else if (_wcsicmp(option, L"--hover-selected") == 0) {
+      g_visual_state = L"selected-pointer-over";
+    } else if (_wcsicmp(option, L"--press-selected") == 0) {
+      g_visual_state = L"selected-pressed";
+    } else if (_wcsicmp(option, L"--hover-unselected") == 0) {
+      g_visual_state = L"unselected-pointer-over";
+    } else if (_wcsicmp(option, L"--press-unselected") == 0) {
+      g_visual_state = L"unselected-pressed";
+    } else if (_wcsicmp(option, L"--hover-add") == 0) {
+      g_visual_state = L"add-pointer-over";
     }
   }
   PushState();
 
   ShowWindow(window, SW_SHOWDEFAULT);
   UpdateWindow(window);
-  if (argc > 1 && wcsncmp(argv[1], L"--", 2) != 0) {
-    g_capture_path = argv[1];
-    const UINT_PTR timer = SetTimer(window, 1, 750, nullptr);
+  if (!g_visual_state.empty()) {
+    SetTimer(window, 2, 350, nullptr);
+  }
+  if (!g_capture_path.empty()) {
+    const UINT_PTR timer =
+        SetTimer(window, 1, !g_visual_state.empty() ? 1000 : 750, nullptr);
     std::fwprintf(stderr, L"WinUI capture timer: %llu\n",
                   static_cast<unsigned long long>(timer));
   }

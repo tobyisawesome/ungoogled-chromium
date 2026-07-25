@@ -1,42 +1,7 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index b669d4f3ee..5ec87700cc 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -1540,8 +1540,6 @@ static_library("ui") {
-       "//chrome/browser/regional_capabilities",
-       "//chrome/browser/safe_browsing",
-       "//chrome/browser/safe_browsing:advanced_protection",
--      "//chrome/browser/screen_ai:screen_ai_install_state",
--      "//chrome/browser/screen_ai:screen_ai_service_router_factory",
-       "//chrome/browser/smart_card",
-       "//chrome/browser/support_tool",
-       "//chrome/browser/tab_group_sync:utils",
-@@ -2399,7 +2397,6 @@ static_library("ui") {
-       "//chrome/browser/policy:onc",
-       "//chrome/browser/policy:system_features_disable_list",
-       "//chrome/browser/push_notification",
--      "//chrome/browser/screen_ai/public:optical_character_recognizer",
-       "//chrome/browser/ui/ash/app_access",
-       "//chrome/browser/ui/ash/arc",
-       "//chrome/browser/ui/ash/arc/arc_app_dialog_view",
-@@ -4297,8 +4294,6 @@ static_library("ui") {
-       "views/safe_browsing/password_reuse_modal_warning_dialog.h",
-       "views/safe_browsing/tailored_security_desktop_dialog_manager.cc",
-       "views/safe_browsing/tailored_security_desktop_dialog_manager.h",
--      "views/safe_browsing/tailored_security_unconsented_modal.cc",
--      "views/safe_browsing/tailored_security_unconsented_modal.h",
-       "views/screen_sharing_util.cc",
-       "views/screen_sharing_util.h",
-       "views/select_audio_output/select_audio_output_dialog.cc",
-@@ -4762,7 +4757,6 @@ static_library("ui") {
-       "//chrome/browser/ui/waap:waap_utils",
-       "//chrome/browser/ui/webauthn:impl",
-       "//chrome/browser/ui/webui/app_service_internals",
--      "//chrome/browser/ui/webui/autofill_ml_internals",
-       "//chrome/browser/ui/webui/content_annotator_internals",
-       "//chrome/browser/ui/webui/side_panel/customize_chrome",
-       "//chrome/browser/ui/window_name_prompt",
-@@ -4996,6 +4990,9 @@ static_library("ui") {
+@@ -4990,6 +4990,9 @@ static_library("ui") {
          "accessibility_util.h",
          "views/accessibility/accessibility_util.cc",
          "views/chrome_views_delegate_win.cc",
@@ -47,10 +12,36 @@ index b669d4f3ee..5ec87700cc 100644
      }
 
 diff --git a/chrome/browser/ui/views/frame/browser_frame_view_win.cc b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
-index f829637e45..56cf4ef93a 100644
 --- a/chrome/browser/ui/views/frame/browser_frame_view_win.cc
 +++ b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
-@@ -519,11 +519,31 @@ bool BrowserFrameViewWin::IsMaximized() const {
+@@ -404,14 +404,18 @@ int BrowserFrameViewWin::NonClientHitTest(const gfx::Point& point) {
+     return frame_component;
+   }
+ 
+-  // Then see if the point is within any of the window controls.
+-  const gfx::Point local_point =
+-      ConvertPointToTarget(parent(), caption_button_container_, point);
+-  if (caption_button_container_->HitTestPoint(local_point)) {
+-    const int hit_test_result =
+-        caption_button_container_->NonClientHitTest(local_point);
+-    if (hit_test_result != HTNOWHERE) {
+-      return hit_test_result;
++  // Then see if the point is within any of the window controls. Curve's WinUI
++  // shell owns this entire region; testing the hidden Views container by bounds
++  // alone can still dispatch its caption commands through the XAML layer.
++  if (!curve_browser_native_shell_enabled_) {
++    const gfx::Point local_point =
++        ConvertPointToTarget(parent(), caption_button_container_, point);
++    if (caption_button_container_->HitTestPoint(local_point)) {
++      const int hit_test_result =
++          caption_button_container_->NonClientHitTest(local_point);
++      if (hit_test_result != HTNOWHERE) {
++        return hit_test_result;
++      }
+     }
+   }
+ 
+@@ -519,11 +523,32 @@ bool BrowserFrameViewWin::IsMaximized() const {
    return browser_widget()->IsMaximized();
  }
 
@@ -59,6 +50,7 @@ index f829637e45..56cf4ef93a 100644
 +    return;
 +  }
 +  curve_browser_native_shell_enabled_ = enabled;
++  caption_button_container_->SetCanProcessEventsWithinSubtree(!enabled);
 +  caption_button_container_->SetVisible(!enabled &&
 +                                        !browser_widget()->IsFullscreen());
 +  if (window_icon_) {
@@ -82,7 +74,7 @@ index f829637e45..56cf4ef93a 100644
    if (ShouldBrowserCustomDrawTitlebar(GetBrowserView())) {
      PaintTitlebar(canvas);
    }
-@@ -852,7 +872,9 @@ void BrowserFrameViewWin::LayoutTitleBar() {
+@@ -852,7 +877,9 @@ void BrowserFrameViewWin::LayoutTitleBar() {
  void BrowserFrameViewWin::LayoutCaptionButtons() {
    TRACE_EVENT0("views.frame", "BrowserFrameViewWin::LayoutCaptionButtons");
 
@@ -94,7 +86,6 @@ index f829637e45..56cf4ef93a 100644
    const gfx::Size preferred_size =
        caption_button_container_->GetPreferredSize();
 diff --git a/chrome/browser/ui/views/frame/browser_frame_view_win.h b/chrome/browser/ui/views/frame/browser_frame_view_win.h
-index 0d3be37f68..6be6a20e30 100644
 --- a/chrome/browser/ui/views/frame/browser_frame_view_win.h
 +++ b/chrome/browser/ui/views/frame/browser_frame_view_win.h
 @@ -63,6 +63,10 @@ class BrowserFrameViewWin : public BrowserFrameView, public TabIconViewModel {
@@ -118,7 +109,6 @@ index 0d3be37f68..6be6a20e30 100644
    base::win::ScopedGDIObject<HICON> small_window_icon_;
    // The big icon created from the bitmap image of the window icon.
 diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
-index c5b196b2be..59b150f585 100644
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
 @@ -153,6 +153,10 @@
@@ -132,17 +122,7 @@ index c5b196b2be..59b150f585 100644
  #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h"
-@@ -749,6 +753,9 @@ class BrowserView::ExclusiveAccessContextImpl
-   void UpdateExclusiveAccessBubble(
-       const ExclusiveAccessBubbleParams& params,
-       ExclusiveAccessBubbleHideCallback first_hide_callback) override {
-+    if (base::CommandLine::ForCurrentProcess()->HasSwitch("hide-fullscreen-exit-ui")) {
-+      return;
-+    }
-     // Trusted pinned mode does not allow to escape. So do not show the bubble.
-     bool is_trusted_pinned =
-         platform_util::IsBrowserLockedFullscreen(browser_view_->browser_.get());
-@@ -1068,6 +1075,12 @@ BrowserView::BrowserView(Browser* browser)
+@@ -1071,6 +1075,12 @@ BrowserView::BrowserView(Browser* browser)
  }
 
  BrowserView::~BrowserView() {
@@ -155,7 +135,7 @@ index c5b196b2be..59b150f585 100644
    // Remove the layout manager to avoid dangling. This needs to be earlier than
    // other cleanups that destroy views referenced in the layout manager.
    SetLayoutManager(nullptr);
-@@ -1435,6 +1448,13 @@ WebContents* BrowserView::GetActiveWebContents() {
+@@ -1438,6 +1448,13 @@ WebContents* BrowserView::GetActiveWebContents() {
    return browser_->tab_strip_model()->GetActiveWebContents();
  }
 
@@ -169,7 +149,7 @@ index c5b196b2be..59b150f585 100644
  bool BrowserView::GetSupportsTabStrip() const {
    return browser_->CanSupportWindowFeature(
        Browser::WindowFeature::kFeatureTabStrip);
-@@ -2219,6 +2232,12 @@ void BrowserView::FullscreenStateChanged() {
+@@ -2222,6 +2239,12 @@ void BrowserView::FullscreenStateChanged() {
                      !GetFocusManager()->GetFocusedView());
      }
    }
@@ -182,7 +162,7 @@ index c5b196b2be..59b150f585 100644
  }
 
  ToolbarButtonProvider* BrowserView::toolbar_button_provider() {
-@@ -2293,6 +2312,11 @@ void BrowserView::UpdateToolbar(content::WebContents* contents) {
+@@ -2296,6 +2319,11 @@ void BrowserView::UpdateToolbar(content::WebContents* contents) {
         multi_contents_view_->contents_container_views()) {
      contents_container->mini_toolbar()->UpdateContents();
    }
@@ -194,7 +174,7 @@ index c5b196b2be..59b150f585 100644
  }
 
  bool BrowserView::UpdateToolbarSecurityState() {
-@@ -2753,6 +2777,11 @@ void BrowserView::TryNotifyWindowBoundsChanged(const gfx::Rect& widget_bounds) {
+@@ -2756,6 +2784,11 @@ void BrowserView::TryNotifyWindowBoundsChanged(const gfx::Rect& widget_bounds) {
  void BrowserView::OnWidgetVisibilityChanged(views::Widget* widget,
                                              bool visible) {
    UpdateLoadingAnimations(visible);
@@ -206,7 +186,7 @@ index c5b196b2be..59b150f585 100644
  }
 
  std::optional<bool> BrowserView::GetWebApiWindowResizable() const {
-@@ -2830,10 +2859,23 @@ void BrowserView::OnWidgetWindowModalVisibilityChanged(views::Widget* widget,
+@@ -2833,10 +2866,23 @@ void BrowserView::OnWidgetWindowModalVisibilityChanged(views::Widget* widget,
    // (-[NSWindow beginSheet:]), which natively draw a scrim.
    window_scrim_view_->SetVisible(visible);
  #endif
@@ -230,7 +210,7 @@ index c5b196b2be..59b150f585 100644
  }
 
  void BrowserView::DidFinishNavigation(
-@@ -3394,6 +3436,11 @@ void BrowserView::OnSplitTabChanged(const SplitTabChange& change) {
+@@ -3397,6 +3443,11 @@ void BrowserView::OnSplitTabChanged(const SplitTabChange& change) {
  void BrowserView::OnTabChangedAt(tabs::TabInterface* tab,
                                   int index,
                                   TabChangeType change_type) {
@@ -242,7 +222,7 @@ index c5b196b2be..59b150f585 100644
    content::WebContents* contents = tab->GetContents();
 
    if (change_type == TabChangeType::kBlockedOnly) {
-@@ -3418,6 +3465,11 @@ void BrowserView::OnTabStripModelChanged(
+@@ -3421,6 +3472,11 @@ void BrowserView::OnTabStripModelChanged(
      TabStripModel* tab_strip_model,
      const TabStripModelChange& change,
      const TabStripSelectionChange& selection) {
@@ -254,7 +234,7 @@ index c5b196b2be..59b150f585 100644
    // When the active tab changes, elements in the omnibox can change, which
    // can change its preferred size. Re-lay-out the toolbar to reflect the
    // possible change.
-@@ -3865,6 +3917,12 @@ bool BrowserView::ExecuteWindowsCommand(int command_id) {
+@@ -3868,6 +3924,12 @@ bool BrowserView::ExecuteWindowsCommand(int command_id) {
      }
    }
  
@@ -267,7 +247,7 @@ index c5b196b2be..59b150f585 100644
    return chrome::ExecuteCommand(browser_.get(), command_id);
  }
  
-@@ -4012,6 +4064,9 @@ views::View* BrowserView::CreateMacOverlayView() {
+@@ -4015,6 +4077,9 @@ views::View* BrowserView::CreateMacOverlayView() {
  void BrowserView::OnWidgetDestroying(views::Widget* widget) {
    DCHECK(widget_observation_.IsObservingSource(widget));
    widget_observation_.Reset();
@@ -277,7 +257,7 @@ index c5b196b2be..59b150f585 100644
    // Destroy any remaining WebContents early on. Doing so may result in
    // calling back to one of the Views/LayoutManagers or supporting classes of
    // BrowserView. By destroying here we ensure all said classes are valid.
-@@ -4135,10 +4190,18 @@ void BrowserView::ClearForceShowBookmarkBarFlag(
+@@ -4138,13 +4203,18 @@ void BrowserView::ClearForceShowBookmarkBarFlag(
  }
 
  BookmarkBar::State BrowserView::bookmark_bar_state() const {
@@ -290,13 +270,13 @@ index c5b196b2be..59b150f585 100644
  }
 
  void BrowserView::UpdateTabSearchBubbleHost() {
-+  if (base::CommandLine::ForCurrentProcess()->HasSwitch("remove-tabsearch-button")) {
-+    return;
-+  }
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch("remove-tabsearch-button")) {
+     return;
+   }
    if (!GetIsNormalType()) {
      return;
    }
-@@ -5003,6 +5066,40 @@ void BrowserView::AddedToWidget() {
+@@ -5009,6 +5079,40 @@ void BrowserView::AddedToWidget() {
    dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
        kBrowserDialogAnchorElementId, *this);
 
@@ -337,7 +317,7 @@ index c5b196b2be..59b150f585 100644
    initialized_ = true;
  }
 
-@@ -5093,6 +5194,14 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+@@ -5099,6 +5203,14 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
          this);
    }
  
@@ -353,18 +333,8 @@ index c5b196b2be..59b150f585 100644
                                  accelerator.time_stamp());
  }
 diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
-index ef13f8f685..ed856447cb 100644
 --- a/chrome/browser/ui/views/frame/browser_view.h
 +++ b/chrome/browser/ui/views/frame/browser_view.h
-@@ -68,7 +68,7 @@
- #endif
-
- // NOTE: For more information about the objects and files in this directory,
--// view: http://dev.chromium.org/developers/design-documents/browser-window
-+// view: http://dev.ch40m1um.qjz9zk/developers/design-documents/browser-window
-
- class AccessibilityFocusHighlight;
- class BookmarkBarController;
 @@ -77,6 +77,9 @@ class Browser;
  class BrowserViewLayout;
  class ContentsContainerView;
@@ -387,7 +357,7 @@ index ef13f8f685..ed856447cb 100644
    // Returns true if the Browser object associated with this BrowserView
    // supports tabs, such as all normal browsers, and tabbed apps like terminal.
    bool GetSupportsTabStrip() const;
-@@ -1390,6 +1393,12 @@ class BrowserView : public BrowserWindow,
+@@ -1390,6 +1398,12 @@ class BrowserView : public BrowserWindow,
 
    base::CallbackListSubscription zoom_changed_subscription_;
 
@@ -402,10 +372,9 @@ index ef13f8f685..ed856447cb 100644
    base::EnumSet<TabStripAndWebAppViewsReparentedState,
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
 new file mode 100644
-index 0000000000..4afe757f1b
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,884 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -413,7 +382,9 @@ index 0000000000..4afe757f1b
 +#include "chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h"
 +
 +#include <algorithm>
++#include <cwctype>
 +#include <string>
++#include <string_view>
 +#include <utility>
 +#include <vector>
 +
@@ -434,6 +405,7 @@ index 0000000000..4afe757f1b
 +#include "chrome/browser/prefs/session_startup_pref.h"
 +#include "chrome/browser/printing/print_view_manager_common.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
 +#include "chrome/browser/sessions/session_restore.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/ui/browser_commands.h"
@@ -447,6 +419,7 @@ index 0000000000..4afe757f1b
 +#include "components/bookmarks/browser/bookmark_model.h"
 +#include "components/bookmarks/browser/bookmark_node.h"
 +#include "components/bookmarks/common/bookmark_pref_names.h"
++#include "components/bookmarks/common/bookmark_metrics.h"
 +#include "components/download/public/common/download_item.h"
 +#include "components/find_in_page/find_tab_helper.h"
 +#include "components/find_in_page/find_types.h"
@@ -456,6 +429,8 @@ index 0000000000..4afe757f1b
 +#include "components/omnibox/browser/autocomplete_classifier.h"
 +#include "components/omnibox/browser/autocomplete_match.h"
 +#include "components/prefs/pref_service.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_service.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/navigation_entry.h"
 +#include "content/public/browser/favicon_status.h"
@@ -466,6 +441,7 @@ index 0000000000..4afe757f1b
 +#include "content/public/common/referrer.h"
 +#include "ui/base/page_transition_types.h"
 +#include "ui/base/window_open_disposition.h"
++#include "ui/views/controls/webview/webview.h"
 +#include "ui/views/win/hwnd_util.h"
 +#include "url/gurl.h"
 +
@@ -476,6 +452,36 @@ index 0000000000..4afe757f1b
 +    L"Microsoft.WindowsAppRuntime.dll";
 +constexpr char kDisableShellSwitch[] = "disable-curve-browser-shell";
 +constexpr char kShellPathSwitch[] = "curve-browser-shell-path";
++
++bool LooksLikeExplicitNavigation(std::wstring_view text) {
++  const size_t first = text.find_first_not_of(L" \t\r\n");
++  if (first == std::wstring_view::npos) {
++    return false;
++  }
++  const size_t last = text.find_last_not_of(L" \t\r\n");
++  text = text.substr(first, last - first + 1);
++  if (text.find_first_of(L" \t\r\n") != std::wstring_view::npos) {
++    return false;
++  }
++
++  std::wstring lowered(text);
++  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
++                 [](wchar_t character) {
++                   return static_cast<wchar_t>(std::towlower(character));
++                 });
++  const auto starts_with = [&lowered](std::wstring_view prefix) {
++    return lowered.size() >= prefix.size() &&
++           lowered.compare(0, prefix.size(), prefix) == 0;
++  };
++  if (lowered == L"localhost" || starts_with(L"localhost:") ||
++      starts_with(L"chrome:") || starts_with(L"about:") ||
++      starts_with(L"file:") || starts_with(L"view-source:") ||
++      starts_with(L"data:") || starts_with(L"javascript:")) {
++    return true;
++  }
++  return text.find(L"://") != std::wstring_view::npos ||
++         text.find_first_of(L"./\\:") != std::wstring_view::npos;
++}
 +
 +template <typename Function>
 +Function ResolveExport(HMODULE module, const char* name) {
@@ -504,6 +510,18 @@ index 0000000000..4afe757f1b
 +  }
 +  runtime_module = module;
 +  return true;
++}
++
++HMODULE LoadCurveShellModule(const base::FilePath& shell_path) {
++  // DesktopWindowXamlSource releases portions of an island asynchronously.
++  // Keep delegate code resident until process shutdown instead of unloading
++  // the shell DLL as soon as one BrowserView is destroyed.
++  static HMODULE shell_module = nullptr;
++  if (!shell_module) {
++    shell_module = LoadLibraryExW(shell_path.value().c_str(), nullptr,
++                                  LOAD_WITH_ALTERED_SEARCH_PATH);
++  }
++  return shell_module;
 +}
 +
 +uint32_t UserCloseTypes() {
@@ -586,8 +604,7 @@ index 0000000000..4afe757f1b
 +    return false;
 +  }
 +
-+  module_ = LoadLibraryExW(shell_path.value().c_str(), nullptr,
-+                           LOAD_WITH_ALTERED_SEARCH_PATH);
++  module_ = LoadCurveShellModule(shell_path);
 +  if (!module_) {
 +    return false;
 +  }
@@ -637,10 +654,10 @@ index 0000000000..4afe757f1b
 +  set_visible_ = nullptr;
 +  show_find_ = nullptr;
 +  show_restore_prompt_ = nullptr;
-+  if (module_) {
-+    FreeLibrary(module_);
-+    module_ = nullptr;
-+  }
++  // module_ is borrowed from the process-lifetime shell module. XAML island
++  // cleanup may continue after WcsDestroyShell returns, so unloading it here
++  // would invalidate WinUI event delegates still queued on this UI thread.
++  module_ = nullptr;
 +}
 +
 +void CurveBrowserNativeShellHostWin::SyncState() {
@@ -679,7 +696,8 @@ index 0000000000..4afe757f1b
 +        sizeof(WcsTabState), tab_id, index, titles.back().c_str(),
 +        urls.back().c_str(), favicon_urls.back().c_str(),
 +        index == model->active_index(),
-+        model->IsTabPinned(index), contents && contents->IsLoading(), 0,
++        model->IsTabPinned(index), contents && contents->IsLoading(),
++        contents && contents->IsCurrentlyAudible(),
 +        contents && contents->IsAudioMuted()});
 +  }
 +
@@ -699,9 +717,12 @@ index 0000000000..4afe757f1b
 +  std::vector<WcsBookmarkState> bookmarks;
 +  std::vector<BookmarkEntry> bookmark_library_entries;
 +  std::vector<WcsBookmarkState> bookmark_library;
++  bool active_page_bookmarked = false;
 +  if (bookmarks::BookmarkModel* bookmark_model =
 +          BookmarkModelFactory::GetForBrowserContext(browser_->profile());
 +      bookmark_model && bookmark_model->loaded()) {
++    active_page_bookmarked =
++        active_url.is_valid() && bookmark_model->IsBookmarked(active_url);
 +    const bookmarks::BookmarkNode* bar = bookmark_model->bookmark_bar_node();
 +    bookmark_titles.reserve(bar->children().size());
 +    bookmark_urls.reserve(bar->children().size());
@@ -790,6 +811,7 @@ index 0000000000..4afe757f1b
 +      history_query_loading_,
 +      downloads.data(),
 +      downloads.size(),
++      active_page_bookmarked,
 +  };
 +  update_window_state_(shell_, &state);
 +}
@@ -924,14 +946,38 @@ index 0000000000..4afe757f1b
 +      metrics::OmniboxEventProto::OTHER, &match, &alternate_nav_url);
 +  GURL destination_url = match.destination_url;
 +  ui::PageTransition transition = match.transition;
-+  if (!destination_url.is_valid()) {
-+    // Ungoogled Chromium can start with no default search provider. Keep the
-+    // native omnibox useful on that pristine profile while settings support is
-+    // being initialized; once a provider exists the classifier result above
-+    // remains authoritative.
-+    destination_url = GURL("https://www.google.com/search?q=" +
-+                           base::EscapeQueryParamValue(
-+                               base::WideToUTF8(text), true));
++  TemplateURLService* template_url_service =
++      TemplateURLServiceFactory::GetForProfile(browser_->profile());
++  const TemplateURL* default_search_provider =
++      template_url_service
++          ? template_url_service->GetDefaultSearchProvider()
++          : nullptr;
++  const bool query_like_input = !LooksLikeExplicitNavigation(text);
++  if (!destination_url.is_valid() || query_like_input) {
++    // Ungoogled Chromium can expose a placeholder provider that turns search
++    // terms into an HTTP hostname. Prefer a real configured provider, but
++    // reject that classifier-equivalent placeholder before falling back to a
++    // usable search URL on a pristine profile.
++    GURL provider_url;
++    if (default_search_provider &&
++        default_search_provider->url_ref().SupportsReplacement(
++            template_url_service->search_terms_data())) {
++      TemplateURLRef::SearchTermsArgs search_terms(base::WideToUTF16(text));
++      provider_url = GURL(
++          default_search_provider->url_ref().ReplaceSearchTerms(
++              search_terms, template_url_service->search_terms_data()));
++    }
++    const bool usable_provider_url =
++        provider_url.is_valid() && provider_url.SchemeIsHTTPOrHTTPS() &&
++        !provider_url.host().empty() &&
++        provider_url != match.destination_url;
++    if (usable_provider_url) {
++      destination_url = provider_url;
++    } else {
++      destination_url = GURL("https://www.google.com/search?q=" +
++                             base::EscapeQueryParamValue(
++                                 base::WideToUTF8(text), true));
++    }
 +    transition = ui::PAGE_TRANSITION_GENERATED;
 +  }
 +
@@ -1111,9 +1157,14 @@ index 0000000000..4afe757f1b
 +      }
 +      break;
 +    case WCS_COMMAND_FOCUS_CONTENT:
-+      if (content::WebContents* contents = model->GetActiveWebContents()) {
-+        contents->Focus();
++      // Restore both the active ContentsWebView in the Views focus manager and
++      // the renderer's stored focus. WebContents::Focus alone cannot take
++      // Win32 focus back from DesktopWindowXamlSource's InputSiteWindowClass.
++      if (views::WebView* contents_view =
++              browser_view_->GetActiveContentsWebView()) {
++        contents_view->RequestFocus();
 +      }
++      browser_view_->RestoreFocus();
 +      break;
 +    case WCS_COMMAND_FIND_TEXT:
 +    case WCS_COMMAND_FIND_NEXT:
@@ -1165,11 +1216,51 @@ index 0000000000..4afe757f1b
 +        }
 +      }
 +      break;
++    case WCS_COMMAND_SAVE_BOOKMARK:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        bookmarks::BookmarkModel* bookmark_model =
++            BookmarkModelFactory::GetForBrowserContext(browser_->profile());
++        const GURL url = contents->GetVisibleURL();
++        if (bookmark_model && bookmark_model->loaded() && url.is_valid()) {
++          const bookmarks::BookmarkNode* node =
++              bookmark_model->GetMostRecentlyAddedUserNodeForURL(url);
++          if (event_flags != 0) {
++            std::u16string title = base::WideToUTF16(text);
++            if (title.empty()) {
++              title = contents->GetTitle();
++            }
++            if (node) {
++              bookmark_model->SetTitle(
++                  node, title, bookmarks::metrics::BookmarkEditSource::kUser);
++            } else {
++              const bookmarks::BookmarkNode* parent =
++                  bookmark_model->bookmark_bar_node();
++              bookmark_model->AddNewURL(parent, parent->children().size(),
++                                        title, url);
++            }
++          } else if (node) {
++            bookmark_model->Remove(
++                node, bookmarks::metrics::BookmarkEditSource::kUser,
++                FROM_HERE);
++          }
++          SyncState();
++        }
++      }
++      break;
++    case WCS_COMMAND_OPEN_SITE_SETTINGS: {
++      const GURL page_url(base::WideToUTF8(text));
++      const std::string site =
++          page_url.is_valid() ? page_url.DeprecatedGetOriginAsURL().spec()
++                              : std::string();
++      OpenInternalPage(GURL(
++          "chrome://settings/content/siteDetails?site=" +
++          base::EscapeQueryParamValue(site, /*use_plus=*/false)));
++      break;
++    }
 +  }
 +}
 diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 new file mode 100644
-index 0000000000..c57df9a6bd
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
 @@ -0,0 +1,95 @@
@@ -1270,10 +1361,9 @@ index 0000000000..c57df9a6bd
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
 diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
 new file mode 100644
-index 0000000000..d96c09a84e
 --- /dev/null
 +++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,166 @@
 +// Copyright 2026 The Curve Browser Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1288,7 +1378,7 @@ index 0000000000..d96c09a84e
 +// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
 +// export dynamically so a missing or incompatible WinUI payload falls back to
 +// the stock Views chrome instead of preventing the browser from starting.
-+#define WCS_API_VERSION 9u
++#define WCS_API_VERSION 10u
 +
 +typedef void* WcsShellHandle;
 +
@@ -1336,6 +1426,8 @@ index 0000000000..d96c09a84e
 +  WCS_COMMAND_RESTORE_SESSION = 50,
 +  WCS_COMMAND_OPEN_DOWNLOAD = 51,
 +  WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
++  WCS_COMMAND_SAVE_BOOKMARK = 53,
++  WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
 +} WcsCommand;
 +
 +typedef struct WcsCommandArgs {
@@ -1416,6 +1508,7 @@ index 0000000000..d96c09a84e
 +  int32_t history_loading;
 +  const WcsDownloadState* downloads;
 +  size_t download_count;
++  int32_t active_page_bookmarked;
 +} WcsWindowState;
 +
 +typedef enum WcsContextMenuItemType {
@@ -1438,7 +1531,6 @@ index 0000000000..d96c09a84e
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
 diff --git a/chrome/browser/ui/views/session_crashed_bubble_view.cc b/chrome/browser/ui/views/session_crashed_bubble_view.cc
-index 495fa2d9e0..3701aab9bf 100644
 --- a/chrome/browser/ui/views/session_crashed_bubble_view.cc
 +++ b/chrome/browser/ui/views/session_crashed_bubble_view.cc
 @@ -258,6 +258,14 @@ void SessionCrashedBubbleView::Show(
@@ -1457,7 +1549,6 @@ index 495fa2d9e0..3701aab9bf 100644
      return;
    }
 diff --git a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
-index 625e3b90c0..073ad7f811 100644
 --- a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
 +++ b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
 @@ -6,6 +6,7 @@
