@@ -108,3 +108,8 @@ extra/ungoogled-chromium/disable-ai-search-shortcuts.patch
 extra/ungoogled-chromium/disable-fedcm-by-default.patch
 extra/ungoogled-chromium/bundle-hyphenation-patterns.patch
 extra/ungoogled-chromium/add-flag-for-disabling-jit.patch
+extra/curve-browser/product-identity.patch
+extra/curve-browser/portable-user-data.patch
+extra/curve-browser/native-winui-shell-host.patch
+extra/curve-browser/native-fluent-scrollbars.patch
+extra/curve-browser/bundle-ublock-origin.patch

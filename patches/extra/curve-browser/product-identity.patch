@@ -1,0 +1,92 @@
+description: give Curve Browser a distinct Windows product and install identity
+author: Curve Browser Authors
+
+---
+ chrome/app/theme/chromium/BRANDING                           | 14 +++++++-------
+ chrome/install_static/chromium_install_modes.h               | 17 +++++++++--------
+ chrome/installer/launcher_support/chrome_launcher_support.cc |  2 +-
+ chrome/installer/mini_installer/mini_installer_constants.cc  |  6 +++---
+ 4 files changed, 20 insertions(+), 19 deletions(-)
+
+--- a/chrome/app/theme/chromium/BRANDING
++++ b/chrome/app/theme/chromium/BRANDING
+@@ -1,10 +1,10 @@
+-COMPANY_FULLNAME=The Chromium Authors
+-COMPANY_SHORTNAME=The Chromium Authors
+-PRODUCT_FULLNAME=Chromium
+-PRODUCT_SHORTNAME=Chromium
+-PRODUCT_INSTALLER_FULLNAME=Chromium Installer
+-PRODUCT_INSTALLER_SHORTNAME=Chromium Installer
+-COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Chromium Authors. All rights reserved.
++COMPANY_FULLNAME=Curve Browser Authors
++COMPANY_SHORTNAME=Curve Browser
++PRODUCT_FULLNAME=Curve Browser
++PRODUCT_SHORTNAME=Curve Browser
++PRODUCT_INSTALLER_FULLNAME=Curve Browser Installer
++PRODUCT_INSTALLER_SHORTNAME=Curve Browser Installer
++COPYRIGHT=Copyright @LASTCHANGE_YEAR@ The Curve Browser Authors. Chromium portions copyright The Chromium Authors.
+ MAC_BUNDLE_ID=org.chromium.Chromium
+ MAC_CREATOR_CODE=Cr24
+ MAC_TEAM_ID=
+--- a/chrome/install_static/chromium_install_modes.h
++++ b/chrome/install_static/chromium_install_modes.h
+@@ -21,7 +21,7 @@ inline constexpr wchar_t kCompanyPathName[] = L"";
+ 
+ // The brand-specific product name to be included as a component of the install
+ // and user data directory paths.
+-inline constexpr wchar_t kProductPathName[] = L"Chromium";
++inline constexpr wchar_t kProductPathName[] = L"Curve Browser";
+ 
+ // The brand-specific safe browsing client name.
+ inline constexpr char kSafeBrowsingName[] = "chromium";
+@@ -45,14 +45,15 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+         .app_guid =
+             L"",  // Empty app_guid since no integration with Google Update.
+-        .base_app_name = L"Chromium",              // A distinct base_app_name.
+-        .base_app_id = L"Chromium",                // A distinct base_app_id.
+-        .browser_prog_id_prefix = L"ChromiumHTM",  // Browser ProgID prefix.
++        .base_app_name = L"Curve Browser",  // A distinct base_app_name.
++        .base_app_id = L"CurveBrowser",      // A distinct base_app_id.
++        .browser_prog_id_prefix =
++            L"CurveBrowserHTM",  // Browser ProgID prefix.
+         .browser_prog_id_description =
+-            L"Chromium HTML Document",  // Browser ProgID description.
+-        .direct_launch_url_scheme = "chromium",
+-        .pdf_prog_id_prefix = L"ChromiumPDF",  // PDF ProgID prefix.
++            L"Curve Browser HTML Document",  // Browser ProgID description.
++        .direct_launch_url_scheme = "curve-browser",
++        .pdf_prog_id_prefix = L"CurveBrowserPDF",  // PDF ProgID prefix.
+         .pdf_prog_id_description =
+-            L"Chromium PDF Document",  // PDF ProgID description.
++            L"Curve Browser PDF Document",  // PDF ProgID description.
+         .active_setup_guid =
+             L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup
+                                                         // GUID.
+--- a/chrome/installer/launcher_support/chrome_launcher_support.cc
++++ b/chrome/installer/launcher_support/chrome_launcher_support.cc
+@@ -29,6 +29,6 @@ const wchar_t kBrowserAppGuid[] = L"{8A69D345-D564-463c-AFF1-A69D9E530F96}";
+ const wchar_t kSxSBrowserAppGuid[] = L"{4ea16ac7-fd5a-47c3-875b-dbf4a2008c20}";
+ #else
+-const wchar_t kInstallationRegKey[] = L"Software\\Chromium";
++const wchar_t kInstallationRegKey[] = L"Software\\Curve Browser";
+ #endif
+ 
+ // Copied from util_constants.cc.
+--- a/chrome/installer/mini_installer/mini_installer_constants.cc
++++ b/chrome/installer/mini_installer/mini_installer_constants.cc
+@@ -67,12 +67,12 @@ const wchar_t kCleanupRegistryKey[] = L"Software\\Chrome for Testing";
+ #else
+ // The path to the key containing each app's Clients registry key.
+ // No trailing slash on this one because the app's GUID is not appended.
+-const wchar_t kClientsKeyBase[] = L"Software\\Chromium";
++const wchar_t kClientsKeyBase[] = L"Software\\Curve Browser";
+ // The path to the key containing each app's Client State registry key.
+ // No trailing slash on this one because the app's GUID is not appended.
+-const wchar_t kClientStateKeyBase[] = L"Software\\Chromium";
++const wchar_t kClientStateKeyBase[] = L"Software\\Curve Browser";
+ // The path to the key in which kCleanupRegistryValue is found.
+-const wchar_t kCleanupRegistryKey[] = L"Software\\Chromium";
++const wchar_t kCleanupRegistryKey[] = L"Software\\Curve Browser";
+ #endif
+ 
+ }  // namespace mini_installer

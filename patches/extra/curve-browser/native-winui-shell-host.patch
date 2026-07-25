@@ -1,0 +1,1772 @@
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -4990,6 +4990,9 @@ static_library("ui") {
+         "accessibility_util.h",
+         "views/accessibility/accessibility_util.cc",
+         "views/chrome_views_delegate_win.cc",
++        "views/frame/curve_browser_native_shell_host_win.cc",
++        "views/frame/curve_browser_native_shell_host_win.h",
++        "views/frame/curve_browser_shell_api_win.h",
+       ]
+     }
+
+diff --git a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
+--- a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
++++ b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_manager.cc
+@@ -12,6 +12,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
++#include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/default_browser/default_browser_controller.h"
+ #include "chrome/browser/default_browser/default_browser_manager.h"
+@@ -27,6 +28,11 @@
+ #include "components/infobars/core/infobar.h"
+ #include "components/prefs/pref_service.h"
+ 
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/ui/browser_finder.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#endif
++
+ using CloseReason = DefaultBrowserPromptManager::CloseReason;
+ 
+ DefaultBrowserInfoBarManager::DefaultBrowserInfoBarManager() = default;
+@@ -100,6 +106,18 @@ void DefaultBrowserInfoBarManager::CreateInfoBarForWebContents(
+   // Ensure that an infobar hasn't already been created.
+   CHECK(!infobars_.contains(web_contents));
+ 
++#if BUILDFLAG(IS_WIN)
++  if (Browser* browser = chrome::FindBrowserWithTab(web_contents)) {
++    if (BrowserView* browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser);
++        browser_view &&
++        browser_view->ShowCurveBrowserDefaultBrowserPrompt(
++            can_pin_to_taskbar())) {
++      return;
++    }
++  }
++#endif
++
+   infobars::InfoBar* infobar = DefaultBrowserInfoBarDelegate::Create(
+       infobars::ContentInfoBarManager::FromWebContents(web_contents), profile,
+       can_pin_to_taskbar());
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_win.cc b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
+--- a/chrome/browser/ui/views/frame/browser_frame_view_win.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
+@@ -404,14 +404,18 @@ int BrowserFrameViewWin::NonClientHitTest(const gfx::Point& point) {
+     return frame_component;
+   }
+ 
+-  // Then see if the point is within any of the window controls.
+-  const gfx::Point local_point =
+-      ConvertPointToTarget(parent(), caption_button_container_, point);
+-  if (caption_button_container_->HitTestPoint(local_point)) {
+-    const int hit_test_result =
+-        caption_button_container_->NonClientHitTest(local_point);
+-    if (hit_test_result != HTNOWHERE) {
+-      return hit_test_result;
++  // Then see if the point is within any of the window controls. Curve's WinUI
++  // shell owns this entire region; testing the hidden Views container by bounds
++  // alone can still dispatch its caption commands through the XAML layer.
++  if (!curve_browser_native_shell_enabled_) {
++    const gfx::Point local_point =
++        ConvertPointToTarget(parent(), caption_button_container_, point);
++    if (caption_button_container_->HitTestPoint(local_point)) {
++      const int hit_test_result =
++          caption_button_container_->NonClientHitTest(local_point);
++      if (hit_test_result != HTNOWHERE) {
++        return hit_test_result;
++      }
+     }
+   }
+ 
+@@ -519,11 +523,32 @@ bool BrowserFrameViewWin::IsMaximized() const {
+   return browser_widget()->IsMaximized();
+ }
+
++void BrowserFrameViewWin::SetCurveBrowserNativeShellEnabled(bool enabled) {
++  if (curve_browser_native_shell_enabled_ == enabled) {
++    return;
++  }
++  curve_browser_native_shell_enabled_ = enabled;
++  caption_button_container_->SetCanProcessEventsWithinSubtree(!enabled);
++  caption_button_container_->SetVisible(!enabled &&
++                                        !browser_widget()->IsFullscreen());
++  if (window_icon_) {
++    window_icon_->SetVisible(!enabled);
++  }
++  if (window_title_) {
++    window_title_->SetVisible(!enabled);
++  }
++  InvalidateLayout();
++  SchedulePaint();
++}
++
+ ///////////////////////////////////////////////////////////////////////////////
+ // BrowserFrameViewWin, views::View overrides:
+
+ void BrowserFrameViewWin::OnPaint(gfx::Canvas* canvas) {
+   TRACE_EVENT0("views.frame", "BrowserFrameViewWin::OnPaint");
++  if (curve_browser_native_shell_enabled_) {
++    return;
++  }
+   if (ShouldBrowserCustomDrawTitlebar(GetBrowserView())) {
+     PaintTitlebar(canvas);
+   }
+@@ -852,7 +877,9 @@ void BrowserFrameViewWin::LayoutTitleBar() {
+ void BrowserFrameViewWin::LayoutCaptionButtons() {
+   TRACE_EVENT0("views.frame", "BrowserFrameViewWin::LayoutCaptionButtons");
+
+-  caption_button_container_->SetVisible(!browser_widget()->IsFullscreen());
++  caption_button_container_->SetVisible(
++      !curve_browser_native_shell_enabled_ &&
++      !browser_widget()->IsFullscreen());
+
+   const gfx::Size preferred_size =
+       caption_button_container_->GetPreferredSize();
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_win.h b/chrome/browser/ui/views/frame/browser_frame_view_win.h
+--- a/chrome/browser/ui/views/frame/browser_frame_view_win.h
++++ b/chrome/browser/ui/views/frame/browser_frame_view_win.h
+@@ -63,6 +63,10 @@ class BrowserFrameViewWin : public BrowserFrameView, public TabIconViewModel {
+
+   bool IsMaximized() const;
+
++  // Suppresses Chromium's painted frame and Views caption controls while the
++  // in-process Curve Browser WinUI title bar owns those surfaces.
++  void SetCurveBrowserNativeShellEnabled(bool enabled);
++
+   // Returns the y coordinate for the top of the frame, which in maximized mode
+   // is the top of the screen and in restored mode is 1 pixel below the top of
+   // the window to leave room for the visual border that Windows draws.
+@@ -177,6 +181,8 @@ class BrowserFrameViewWin : public BrowserFrameView, public TabIconViewModel {
+   // The bounds of the ClientView.
+   gfx::Rect client_view_bounds_;
+
++  bool curve_browser_native_shell_enabled_ = false;
++
+   // The small icon created from the bitmap image of the window icon.
+   base::win::ScopedGDIObject<HICON> small_window_icon_;
+   // The big icon created from the bitmap image of the window icon.
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -153,6 +153,10 @@
+ #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
+ #include "chrome/browser/ui/views/frame/contents_separator.h"
+ #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
++#include "chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h"
++#endif
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h"
+@@ -1071,6 +1075,12 @@ BrowserView::BrowserView(Browser* browser)
+ }
+
+ BrowserView::~BrowserView() {
++#if BUILDFLAG(IS_WIN)
++  // The XAML island is parented to the browser HWND and must be removed before
++  // the Widget and its native window start tearing down.
++  curve_browser_shell_.reset();
++#endif
++
+   // Remove the layout manager to avoid dangling. This needs to be earlier than
+   // other cleanups that destroy views referenced in the layout manager.
+   SetLayoutManager(nullptr);
+@@ -1438,6 +1448,19 @@ WebContents* BrowserView::GetActiveWebContents() {
+   return browser_->tab_strip_model()->GetActiveWebContents();
+ }
+
++#if BUILDFLAG(IS_WIN)
++bool BrowserView::ShowCurveBrowserRestorePrompt() {
++  return curve_browser_shell_ && curve_browser_shell_->is_active() &&
++         curve_browser_shell_->ShowRestorePrompt();
++}
++
++bool BrowserView::ShowCurveBrowserDefaultBrowserPrompt(
++    bool can_pin_to_taskbar) {
++  return curve_browser_shell_ && curve_browser_shell_->is_active() &&
++         curve_browser_shell_->ShowDefaultBrowserPrompt(can_pin_to_taskbar);
++}
++#endif
++
+ bool BrowserView::GetSupportsTabStrip() const {
+   return browser_->CanSupportWindowFeature(
+       Browser::WindowFeature::kFeatureTabStrip);
+@@ -2222,6 +2239,12 @@ void BrowserView::FullscreenStateChanged() {
+                     !GetFocusManager()->GetFocusedView());
+     }
+   }
++
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SetVisible(!IsFullscreen());
++  }
++#endif
+ }
+
+ ToolbarButtonProvider* BrowserView::toolbar_button_provider() {
+@@ -2296,6 +2319,11 @@ void BrowserView::UpdateToolbar(content::WebContents* contents) {
+        multi_contents_view_->contents_container_views()) {
+     contents_container->mini_toolbar()->UpdateContents();
+   }
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SyncState();
++  }
++#endif
+ }
+
+ bool BrowserView::UpdateToolbarSecurityState() {
+@@ -2756,6 +2784,11 @@ void BrowserView::TryNotifyWindowBoundsChanged(const gfx::Rect& widget_bounds) {
+ void BrowserView::OnWidgetVisibilityChanged(views::Widget* widget,
+                                             bool visible) {
+   UpdateLoadingAnimations(visible);
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SetVisible(visible && !IsFullscreen());
++  }
++#endif
+ }
+
+ std::optional<bool> BrowserView::GetWebApiWindowResizable() const {
+@@ -2833,10 +2866,23 @@ void BrowserView::OnWidgetWindowModalVisibilityChanged(views::Widget* widget,
+   // (-[NSWindow beginSheet:]), which natively draw a scrim.
+   window_scrim_view_->SetVisible(visible);
+ #endif
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    // Window-modal Views and print-preview surfaces must remain above the
++    // child-HWND XAML island. Temporarily remove the shell from z-order while
++    // the modal is visible, then restore it when the modal closes.
++    curve_browser_shell_->SetVisible(!visible && !IsFullscreen());
++  }
++#endif
+ }
+
+ void BrowserView::TitleWasSet(content::NavigationEntry* entry) {
+   UpdateAccessibleNameForRootView();
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SyncState();
++  }
++#endif
+ }
+
+ void BrowserView::DidFinishNavigation(
+@@ -3397,6 +3443,11 @@ void BrowserView::OnSplitTabChanged(const SplitTabChange& change) {
+ void BrowserView::OnTabChangedAt(tabs::TabInterface* tab,
+                                  int index,
+                                  TabChangeType change_type) {
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SyncState();
++  }
++#endif
+   content::WebContents* contents = tab->GetContents();
+
+   if (change_type == TabChangeType::kBlockedOnly) {
+@@ -3421,6 +3472,11 @@ void BrowserView::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+     const TabStripSelectionChange& selection) {
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    curve_browser_shell_->SyncState();
++  }
++#endif
+   // When the active tab changes, elements in the omnibox can change, which
+   // can change its preferred size. Re-lay-out the toolbar to reflect the
+   // possible change.
+@@ -3868,6 +3924,12 @@ bool BrowserView::ExecuteWindowsCommand(int command_id) {
+     }
+   }
+ 
++  if (command_id == IDC_FIND && curve_browser_shell_ &&
++      curve_browser_shell_->is_active()) {
++    curve_browser_shell_->ShowFind();
++    return true;
++  }
++
+   return chrome::ExecuteCommand(browser_.get(), command_id);
+ }
+ 
+@@ -4015,6 +4077,9 @@ views::View* BrowserView::CreateMacOverlayView() {
+ void BrowserView::OnWidgetDestroying(views::Widget* widget) {
+   DCHECK(widget_observation_.IsObservingSource(widget));
+   widget_observation_.Reset();
++#if BUILDFLAG(IS_WIN)
++  curve_browser_shell_.reset();
++#endif
+   // Destroy any remaining WebContents early on. Doing so may result in
+   // calling back to one of the Views/LayoutManagers or supporting classes of
+   // BrowserView. By destroying here we ensure all said classes are valid.
+@@ -4138,13 +4203,18 @@ void BrowserView::ClearForceShowBookmarkBarFlag(
+ }
+
+ BookmarkBar::State BrowserView::bookmark_bar_state() const {
++#if BUILDFLAG(IS_WIN)
++  if (curve_browser_shell_) {
++    return BookmarkBar::HIDDEN;
++  }
++#endif
+   return BookmarkBarController::From(browser_.get())->bookmark_bar_state();
+ }
+
+ void BrowserView::UpdateTabSearchBubbleHost() {
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch("remove-tabsearch-button")) {
+     return;
+   }
+   if (!GetIsNormalType()) {
+     return;
+   }
+@@ -5009,6 +5079,40 @@ void BrowserView::AddedToWidget() {
+   dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+       kBrowserDialogAnchorElementId, *this);
+
++#if BUILDFLAG(IS_WIN)
++  curve_browser_shell_ =
++      std::make_unique<CurveBrowserNativeShellHostWin>(this, browser_.get());
++  if (curve_browser_shell_->Initialize()) {
++    // Keep the native Views controls in the layout tree so Chromium continues
++    // to reserve the top-chrome area and all of its existing bubble anchors
++    // remain valid. The child HWND XAML island paints and receives input above
++    // these transparent layers. Forty-nine DIPs for the hidden tab strip
++    // compensates for Chromium's one-DIP tabstrip/toolbar overlap, yielding an
++    // exact 96-DIP shell (48-DIP title/tab row plus 48-DIP command row).
++    horizontal_tab_strip_region_view_->SetPreferredSize(gfx::Size(0, 49));
++    toolbar_->SetPreferredSize(gfx::Size(0, 48));
++    horizontal_tab_strip_region_view_->SetPaintToLayer();
++    horizontal_tab_strip_region_view_->layer()->SetOpacity(0.0f);
++    horizontal_tab_strip_region_view_->SetCanProcessEventsWithinSubtree(false);
++    toolbar_->SetPaintToLayer();
++    toolbar_->layer()->SetOpacity(0.0f);
++    toolbar_->SetCanProcessEventsWithinSubtree(false);
++    if (bookmark_bar_view_) {
++      bookmark_bar_view_->SetPreferredSize(gfx::Size(0, 36));
++      bookmark_bar_view_->SetPaintToLayer();
++      bookmark_bar_view_->layer()->SetOpacity(0.0f);
++      bookmark_bar_view_->SetCanProcessEventsWithinSubtree(false);
++    }
++    if (auto* native_frame_view =
++            views::AsViewClass<BrowserFrameViewWin>(GetFrameView())) {
++      native_frame_view->SetCurveBrowserNativeShellEnabled(true);
++    }
++    InvalidateLayout();
++  } else {
++    curve_browser_shell_.reset();
++  }
++#endif
++
+   initialized_ = true;
+ }
+
+@@ -5099,6 +5203,14 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+         this);
+   }
+ 
++#if BUILDFLAG(IS_WIN)
++  if (command_id == IDC_FIND && curve_browser_shell_ &&
++      curve_browser_shell_->is_active()) {
++    curve_browser_shell_->ShowFind();
++    return true;
++  }
++#endif
++
+   return chrome::ExecuteCommand(browser_.get(), command_id,
+                                 accelerator.time_stamp());
+ }
+diff --git a/chrome/browser/ui/views/frame/browser_view.h b/chrome/browser/ui/views/frame/browser_view.h
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -77,6 +77,9 @@ class Browser;
+ class BrowserViewLayout;
+ class ContentsContainerView;
+ class ContentsLayoutManager;
++#if BUILDFLAG(IS_WIN)
++class CurveBrowserNativeShellHostWin;
++#endif
+ struct DropData;
+ class ExclusiveAccessBubbleViews;
+ class ExclusiveAccessBubbleViewsContext;
+@@ -375,6 +378,13 @@ class BrowserView : public BrowserWindow,
+   // Returns the active WebContents.
+   content::WebContents* GetActiveWebContents();
+
++#if BUILDFLAG(IS_WIN)
++  // Uses the in-process WinUI shell for crash recovery when it is active.
++  bool ShowCurveBrowserRestorePrompt();
++  // Replaces Chromium's startup infobar with a native WinUI prompt.
++  bool ShowCurveBrowserDefaultBrowserPrompt(bool can_pin_to_taskbar);
++#endif
++
+   // Returns true if the Browser object associated with this BrowserView
+   // supports tabs, such as all normal browsers, and tabbed apps like terminal.
+   bool GetSupportsTabStrip() const;
+@@ -1390,6 +1398,12 @@ class BrowserView : public BrowserWindow,
+
+   base::CallbackListSubscription zoom_changed_subscription_;
+
++#if BUILDFLAG(IS_WIN)
++  // Present only when the versioned WinUI shell DLL loads successfully. A
++  // null host leaves Chromium's stock Views chrome fully operational.
++  std::unique_ptr<CurveBrowserNativeShellHostWin> curve_browser_shell_;
++#endif
++
+   // Bitmask of current combination of reparenting states, e.g. immersive and
+   // ChromeOS tablet modes.
+   base::EnumSet<TabStripAndWebAppViewsReparentedState,
+diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.cc
+@@ -0,0 +1,908 @@
++// Copyright 2026 The Curve Browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h"
++
++#include <algorithm>
++#include <cwctype>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/base_paths.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/functional/bind.h"
++#include "base/i18n/time_formatting.h"
++#include "base/location.h"
++#include "base/path_service.h"
++#include "base/strings/escape.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/history/history_service_factory.h"
++#include "chrome/browser/prefs/session_startup_pref.h"
++#include "chrome/browser/printing/print_view_manager_common.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
++#include "chrome/browser/sessions/session_restore.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/omnibox/omnibox_controller.h"
++#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
++#include "chrome/browser/ui/omnibox/omnibox_view.h"
++#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
++#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_prefs.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++#include "components/bookmarks/browser/bookmark_node.h"
++#include "components/bookmarks/common/bookmark_pref_names.h"
++#include "components/bookmarks/common/bookmark_metrics.h"
++#include "components/download/public/common/download_item.h"
++#include "components/find_in_page/find_tab_helper.h"
++#include "components/find_in_page/find_types.h"
++#include "components/history/core/browser/history_service.h"
++#include "components/history/core/browser/history_types.h"
++#include "components/sessions/content/session_tab_helper.h"
++#include "components/omnibox/browser/autocomplete_classifier.h"
++#include "components/omnibox/browser/autocomplete_match.h"
++#include "components/prefs/pref_service.h"
++#include "components/search_engines/template_url.h"
++#include "components/search_engines/template_url_service.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/favicon_status.h"
++#include "content/public/browser/download_manager.h"
++#include "content/public/browser/page_navigator.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/base/window_open_disposition.h"
++#include "ui/views/controls/webview/webview.h"
++#include "ui/views/win/hwnd_util.h"
++#include "url/gurl.h"
++
++namespace {
++
++constexpr wchar_t kShellDllName[] = L"curve_browser_shell.dll";
++constexpr wchar_t kWindowsAppRuntimeDllName[] =
++    L"Microsoft.WindowsAppRuntime.dll";
++constexpr char kDisableShellSwitch[] = "disable-curve-browser-shell";
++constexpr char kShellPathSwitch[] = "curve-browser-shell-path";
++
++bool LooksLikeExplicitNavigation(std::wstring_view text) {
++  const size_t first = text.find_first_not_of(L" \t\r\n");
++  if (first == std::wstring_view::npos) {
++    return false;
++  }
++  const size_t last = text.find_last_not_of(L" \t\r\n");
++  text = text.substr(first, last - first + 1);
++  if (text.find_first_of(L" \t\r\n") != std::wstring_view::npos) {
++    return false;
++  }
++
++  std::wstring lowered(text);
++  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
++                 [](wchar_t character) {
++                   return static_cast<wchar_t>(std::towlower(character));
++                 });
++  const auto starts_with = [&lowered](std::wstring_view prefix) {
++    return lowered.size() >= prefix.size() &&
++           lowered.compare(0, prefix.size(), prefix) == 0;
++  };
++  if (lowered == L"localhost" || starts_with(L"localhost:") ||
++      starts_with(L"chrome:") || starts_with(L"about:") ||
++      starts_with(L"file:") || starts_with(L"view-source:") ||
++      starts_with(L"data:") || starts_with(L"javascript:")) {
++    return true;
++  }
++  return text.find(L"://") != std::wstring_view::npos ||
++         text.find_first_of(L"./\\:") != std::wstring_view::npos;
++}
++
++template <typename Function>
++Function ResolveExport(HMODULE module, const char* name) {
++  return reinterpret_cast<Function>(GetProcAddress(module, name));
++}
++
++bool EnsureSelfContainedRuntimeLoaded(const base::FilePath& directory) {
++  static HMODULE runtime_module = nullptr;
++  if (runtime_module) {
++    return true;
++  }
++
++  const base::FilePath runtime_path =
++      directory.Append(kWindowsAppRuntimeDllName);
++  HMODULE module = LoadLibraryExW(runtime_path.value().c_str(), nullptr,
++                                  LOAD_WITH_ALTERED_SEARCH_PATH);
++  if (!module) {
++    return false;
++  }
++  using EnsureIsLoadedFn = HRESULT(STDAPICALLTYPE*)();
++  const auto ensure_is_loaded = ResolveExport<EnsureIsLoadedFn>(
++      module, "WindowsAppRuntime_EnsureIsLoaded");
++  if (!ensure_is_loaded || FAILED(ensure_is_loaded())) {
++    FreeLibrary(module);
++    return false;
++  }
++  runtime_module = module;
++  return true;
++}
++
++HMODULE LoadCurveShellModule(const base::FilePath& shell_path) {
++  // DesktopWindowXamlSource releases portions of an island asynchronously.
++  // Keep delegate code resident until process shutdown instead of unloading
++  // the shell DLL as soon as one BrowserView is destroyed.
++  static HMODULE shell_module = nullptr;
++  if (!shell_module) {
++    shell_module = LoadLibraryExW(shell_path.value().c_str(), nullptr,
++                                  LOAD_WITH_ALTERED_SEARCH_PATH);
++  }
++  return shell_module;
++}
++
++uint32_t UserCloseTypes() {
++  return CLOSE_USER_GESTURE | CLOSE_CREATE_HISTORICAL_TAB;
++}
++
++struct BookmarkEntry {
++  std::wstring title;
++  std::wstring url;
++  bool is_folder = false;
++};
++
++void AppendBookmarkNode(const bookmarks::BookmarkNode* node,
++                        std::vector<BookmarkEntry>* entries) {
++  if (!node || !entries) {
++    return;
++  }
++  entries->push_back(
++      BookmarkEntry{base::UTF16ToWide(node->GetTitle()),
++                    node->is_url() ? base::UTF8ToWide(node->url().spec()) : L"",
++                    node->is_folder()});
++  for (const auto& child : node->children()) {
++    AppendBookmarkNode(child.get(), entries);
++  }
++}
++
++std::wstring DownloadStatus(const download::DownloadItem* item) {
++  if (!item) {
++    return std::wstring();
++  }
++  switch (item->GetState()) {
++    case download::DownloadItem::IN_PROGRESS: {
++      if (item->IsPaused()) {
++        return L"Paused";
++      }
++      const int percent = item->PercentComplete();
++      return percent >= 0 ? L"Downloading \u00b7 " + std::to_wstring(percent) +
++                                L"%"
++                          : L"Downloading";
++    }
++    case download::DownloadItem::COMPLETE:
++      return L"Completed";
++    case download::DownloadItem::CANCELLED:
++      return L"Canceled";
++    case download::DownloadItem::INTERRUPTED:
++      return L"Interrupted";
++  }
++  return std::wstring();
++}
++
++}  // namespace
++
++CurveBrowserNativeShellHostWin::CurveBrowserNativeShellHostWin(
++    BrowserView* browser_view,
++    Browser* browser)
++    : browser_view_(browser_view), browser_(browser) {}
++
++CurveBrowserNativeShellHostWin::~CurveBrowserNativeShellHostWin() {
++  Unload();
++}
++
++bool CurveBrowserNativeShellHostWin::Initialize() {
++  if (!browser_ || !browser_view_ || !browser_->is_type_normal() ||
++      base::CommandLine::ForCurrentProcess()->HasSwitch(kDisableShellSwitch)) {
++    return false;
++  }
++
++  base::FilePath shell_path =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
++          kShellPathSwitch);
++  if (shell_path.empty()) {
++    base::FilePath executable_directory;
++    if (!base::PathService::Get(base::DIR_EXE, &executable_directory)) {
++      return false;
++    }
++    shell_path = executable_directory.Append(kShellDllName);
++  }
++
++  if (!EnsureSelfContainedRuntimeLoaded(shell_path.DirName())) {
++    return false;
++  }
++
++  module_ = LoadCurveShellModule(shell_path);
++  if (!module_) {
++    return false;
++  }
++
++  const auto get_api_version =
++      ResolveExport<GetApiVersionFn>(module_, "WcsGetApiVersion");
++  const auto create_shell =
++      ResolveExport<CreateShellFn>(module_, "WcsCreateShell");
++  destroy_shell_ = ResolveExport<DestroyShellFn>(module_, "WcsDestroyShell");
++  update_window_state_ =
++      ResolveExport<UpdateWindowStateFn>(module_, "WcsUpdateWindowState");
++  set_visible_ = ResolveExport<SetVisibleFn>(module_, "WcsSetVisible");
++  show_find_ = ResolveExport<ShowFindFn>(module_, "WcsShowFind");
++  show_restore_prompt_ = ResolveExport<ShowRestorePromptFn>(
++      module_, "WcsShowRestorePrompt");
++  show_default_browser_prompt_ = ResolveExport<ShowDefaultBrowserPromptFn>(
++      module_, "WcsShowDefaultBrowserPrompt");
++  if (!get_api_version || get_api_version() != WCS_API_VERSION ||
++      !create_shell || !destroy_shell_ || !update_window_state_ ||
++      !set_visible_ || !show_find_ || !show_restore_prompt_ ||
++      !show_default_browser_prompt_) {
++    Unload();
++    return false;
++  }
++
++  HWND parent = views::HWNDForWidget(browser_view_->GetWidget());
++  if (!parent) {
++    Unload();
++    return false;
++  }
++
++  const WcsHostCallbacks callbacks{sizeof(WcsHostCallbacks), WCS_API_VERSION,
++                                   this, &InvokeCommandThunk};
++  if (FAILED(create_shell(parent, &callbacks, &shell_)) || !shell_) {
++    Unload();
++    return false;
++  }
++
++  SyncState();
++  return true;
++}
++
++void CurveBrowserNativeShellHostWin::Unload() {
++  if (shell_ && destroy_shell_) {
++    destroy_shell_(shell_);
++  }
++  shell_ = nullptr;
++  destroy_shell_ = nullptr;
++  update_window_state_ = nullptr;
++  set_visible_ = nullptr;
++  show_find_ = nullptr;
++  show_restore_prompt_ = nullptr;
++  show_default_browser_prompt_ = nullptr;
++  // module_ is borrowed from the process-lifetime shell module. XAML island
++  // cleanup may continue after WcsDestroyShell returns, so unloading it here
++  // would invalidate WinUI event delegates still queued on this UI thread.
++  module_ = nullptr;
++}
++
++void CurveBrowserNativeShellHostWin::SyncState() {
++  if (!shell_ || !update_window_state_ || !browser_) {
++    return;
++  }
++
++  TabStripModel* model = browser_->tab_strip_model();
++  if (!model) {
++    return;
++  }
++
++  std::vector<std::wstring> titles;
++  std::vector<std::wstring> urls;
++  std::vector<std::wstring> favicon_urls;
++  std::vector<WcsTabState> tabs;
++  titles.reserve(model->count());
++  urls.reserve(model->count());
++  favicon_urls.reserve(model->count());
++  tabs.reserve(model->count());
++
++  for (int index = 0; index < model->count(); ++index) {
++    content::WebContents* contents = model->GetWebContentsAt(index);
++    titles.push_back(contents ? base::UTF16ToWide(contents->GetTitle())
++                              : std::wstring());
++    urls.push_back(contents ? base::UTF8ToWide(contents->GetVisibleURL().spec())
++                            : std::wstring());
++    content::NavigationEntry* entry =
++        contents ? contents->GetController().GetLastCommittedEntry() : nullptr;
++    favicon_urls.push_back(
++        entry ? base::UTF8ToWide(entry->GetFavicon().url.spec())
++              : std::wstring());
++    const int64_t tab_id =
++        contents ? sessions::SessionTabHelper::IdForTab(contents).id() : -1;
++    tabs.push_back(WcsTabState{
++        sizeof(WcsTabState), tab_id, index, titles.back().c_str(),
++        urls.back().c_str(), favicon_urls.back().c_str(),
++        index == model->active_index(),
++        model->IsTabPinned(index), contents && contents->IsLoading(),
++        contents && contents->IsCurrentlyAudible(),
++        contents && contents->IsAudioMuted()});
++  }
++
++  content::WebContents* active_contents = model->GetActiveWebContents();
++  const GURL active_url =
++      active_contents ? active_contents->GetVisibleURL() : GURL();
++  MaybeQueryHistory(active_url);
++  std::wstring profile_name =
++      base::UTF8ToWide(browser_->profile()->GetProfileUserName());
++  if (profile_name.empty()) {
++    profile_name = L"Local profile";
++  }
++  const SessionStartupPref startup_pref =
++      SessionStartupPref::GetStartupPref(browser_->profile());
++  std::vector<std::wstring> bookmark_titles;
++  std::vector<std::wstring> bookmark_urls;
++  std::vector<WcsBookmarkState> bookmarks;
++  std::vector<BookmarkEntry> bookmark_library_entries;
++  std::vector<WcsBookmarkState> bookmark_library;
++  bool active_page_bookmarked = false;
++  if (bookmarks::BookmarkModel* bookmark_model =
++          BookmarkModelFactory::GetForBrowserContext(browser_->profile());
++      bookmark_model && bookmark_model->loaded()) {
++    active_page_bookmarked =
++        active_url.is_valid() && bookmark_model->IsBookmarked(active_url);
++    const bookmarks::BookmarkNode* bar = bookmark_model->bookmark_bar_node();
++    bookmark_titles.reserve(bar->children().size());
++    bookmark_urls.reserve(bar->children().size());
++    bookmarks.reserve(bar->children().size());
++    for (const auto& child : bar->children()) {
++      bookmark_titles.push_back(base::UTF16ToWide(child->GetTitle()));
++      bookmark_urls.push_back(
++          child->is_url() ? base::UTF8ToWide(child->url().spec()) : L"");
++      bookmarks.push_back(
++          WcsBookmarkState{sizeof(WcsBookmarkState),
++                           bookmark_titles.back().c_str(),
++                           bookmark_urls.back().c_str(),
++                           child->is_folder()});
++    }
++    for (const auto& child : bookmark_model->root_node()->children()) {
++      AppendBookmarkNode(child.get(), &bookmark_library_entries);
++    }
++    bookmark_library.reserve(bookmark_library_entries.size());
++    for (const auto& entry : bookmark_library_entries) {
++      bookmark_library.push_back(
++          WcsBookmarkState{sizeof(WcsBookmarkState), entry.title.c_str(),
++                           entry.url.c_str(), entry.is_folder});
++    }
++  }
++  std::vector<WcsHistoryEntryState> history_entries;
++  history_entries.reserve(history_entries_.size());
++  for (const auto& entry : history_entries_) {
++    history_entries.push_back(WcsHistoryEntryState{
++        sizeof(WcsHistoryEntryState), entry.title.c_str(), entry.url.c_str(),
++        entry.visit_time.c_str()});
++  }
++  std::vector<raw_ptr<download::DownloadItem, VectorExperimental>>
++      download_items;
++  std::vector<std::wstring> download_titles;
++  std::vector<std::wstring> download_urls;
++  std::vector<std::wstring> download_paths;
++  std::vector<std::wstring> download_statuses;
++  std::vector<WcsDownloadState> downloads;
++  if (content::DownloadManager* manager =
++          browser_->profile()->GetDownloadManager();
++      manager && manager->IsManagerInitialized()) {
++    manager->GetAllDownloads(&download_items);
++    download_titles.reserve(download_items.size());
++    download_urls.reserve(download_items.size());
++    download_paths.reserve(download_items.size());
++    download_statuses.reserve(download_items.size());
++    downloads.reserve(download_items.size());
++    for (const download::DownloadItem* item : download_items) {
++      if (!item) {
++        continue;
++      }
++      download_titles.push_back(
++          base::UTF16ToWide(item->GetFileNameToReportUser().LossyDisplayName()));
++      download_urls.push_back(base::UTF8ToWide(item->GetURL().spec()));
++      download_paths.push_back(item->GetTargetFilePath().value());
++      download_statuses.push_back(DownloadStatus(item));
++      downloads.push_back(WcsDownloadState{
++          sizeof(WcsDownloadState), item->GetId(),
++          download_titles.back().c_str(), download_urls.back().c_str(),
++          download_paths.back().c_str(), download_statuses.back().c_str(),
++          item->GetState() == download::DownloadItem::COMPLETE,
++          item->GetState() == download::DownloadItem::IN_PROGRESS});
++    }
++  }
++  // Mirror the state Chromium actually laid out. The legacy boolean pref can
++  // remain true while the current visibility policy is "new tab only"; using
++  // it directly makes the native bar cover web content on ordinary pages.
++  const bool show_bookmark_bar = browser_view_->IsBookmarkBarVisible();
++  const WcsWindowState state{
++      sizeof(WcsWindowState),
++      tabs.data(),
++      tabs.size(),
++      model->active_index(),
++      active_contents && active_contents->GetController().CanGoBack(),
++      active_contents && active_contents->GetController().CanGoForward(),
++      browser_->profile()->IsOffTheRecord(),
++      profile_name.c_str(),
++      startup_pref.ShouldRestoreLastSession(),
++      bookmarks.data(),
++      bookmarks.size(),
++      show_bookmark_bar,
++      bookmark_library.data(),
++      bookmark_library.size(),
++      history_entries.data(),
++      history_entries.size(),
++      history_query_loading_,
++      downloads.data(),
++      downloads.size(),
++      active_page_bookmarked,
++  };
++  update_window_state_(shell_, &state);
++}
++
++void CurveBrowserNativeShellHostWin::MaybeQueryHistory(
++    const GURL& active_url) {
++  if (history_query_started_ || !active_url.SchemeIs("chrome") ||
++      active_url.host() != "history") {
++    return;
++  }
++  history_query_started_ = true;
++  history_query_loading_ = true;
++  history::HistoryService* service = HistoryServiceFactory::GetForProfile(
++      browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
++  if (!service) {
++    history_query_loading_ = false;
++    return;
++  }
++  history::QueryOptions options;
++  options.max_count = 50;
++  options.duplicate_policy = history::QueryOptions::REMOVE_DUPLICATES_PER_DAY;
++  service->QueryHistory(
++      std::u16string(), options,
++      base::BindOnce(
++          &CurveBrowserNativeShellHostWin::OnHistoryQueryComplete,
++          weak_ptr_factory_.GetWeakPtr()),
++      &history_task_tracker_);
++}
++
++void CurveBrowserNativeShellHostWin::OnHistoryQueryComplete(
++    history::QueryResults results) {
++  history_entries_.clear();
++  history_entries_.reserve(results.size());
++  for (const history::URLResult& result : results) {
++    history_entries_.push_back(
++        HistoryEntry{base::UTF16ToWide(result.title()),
++                     base::UTF8ToWide(result.url().spec()),
++                     base::UTF16ToWide(
++                         base::TimeFormatShortDateAndTime(
++                             result.visit_time()))});
++  }
++  history_query_loading_ = false;
++  SyncState();
++}
++
++void CurveBrowserNativeShellHostWin::SetVisible(bool visible) {
++  if (shell_ && set_visible_) {
++    set_visible_(shell_, visible ? TRUE : FALSE);
++  }
++}
++
++void CurveBrowserNativeShellHostWin::ShowFind() {
++  if (shell_ && show_find_) {
++    show_find_(shell_);
++  }
++}
++
++bool CurveBrowserNativeShellHostWin::ShowRestorePrompt() {
++  if (!shell_ || !show_restore_prompt_) {
++    return false;
++  }
++  show_restore_prompt_(shell_);
++  return true;
++}
++
++bool CurveBrowserNativeShellHostWin::ShowDefaultBrowserPrompt(
++    bool can_pin_to_taskbar) {
++  if (!shell_ || !show_default_browser_prompt_) {
++    return false;
++  }
++  show_default_browser_prompt_(shell_, can_pin_to_taskbar ? TRUE : FALSE);
++  return true;
++}
++
++// static
++void __stdcall CurveBrowserNativeShellHostWin::InvokeCommandThunk(
++    void* context,
++    const WcsCommandArgs* args) {
++  if (context && args && args->size >= sizeof(WcsCommandArgs)) {
++    static_cast<CurveBrowserNativeShellHostWin*>(context)->PostCommand(*args);
++  }
++}
++
++void CurveBrowserNativeShellHostWin::PostCommand(const WcsCommandArgs& args) {
++  // XAML invokes callbacks while dispatching its own routed event. Defer the
++  // Chromium mutation to avoid re-entering TabView when closing a tab or
++  // tearing down the window. Copy text because the ABI pointer is valid only
++  // for the duration of the callback.
++  std::wstring text = args.text ? args.text : L"";
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&CurveBrowserNativeShellHostWin::InvokeCommand,
++                     weak_ptr_factory_.GetWeakPtr(), args.command, args.tab_id,
++                     args.tab_index, std::move(text), args.event_flags));
++}
++
++int CurveBrowserNativeShellHostWin::ResolveTabIndex(int64_t tab_id,
++                                                    int32_t tab_index) const {
++  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
++  if (!model) {
++    return TabStripModel::kNoTab;
++  }
++  if (tab_index >= 0 && tab_index < model->count()) {
++    content::WebContents* candidate = model->GetWebContentsAt(tab_index);
++    if (tab_id < 0 ||
++        sessions::SessionTabHelper::IdForTab(candidate).id() == tab_id) {
++      return tab_index;
++    }
++  }
++  for (int index = 0; index < model->count(); ++index) {
++    if (sessions::SessionTabHelper::IdForTab(model->GetWebContentsAt(index))
++            .id() == tab_id) {
++      return index;
++    }
++  }
++  return TabStripModel::kNoTab;
++}
++
++void CurveBrowserNativeShellHostWin::ExecuteBrowserCommand(int command_id) {
++  chrome::ExecuteCommandWithDisposition(browser_, command_id,
++                                        WindowOpenDisposition::CURRENT_TAB);
++}
++
++void CurveBrowserNativeShellHostWin::NavigateFromOmnibox(
++    const std::wstring& text) {
++  AutocompleteClassifier* classifier =
++      AutocompleteClassifierFactory::GetForProfile(browser_->profile());
++  if (!classifier) {
++    return;
++  }
++
++  // Classify the native text synchronously. Driving IDC_OPEN_CURRENT_URL
++  // immediately after updating Chromium's hidden Views omnibox races its
++  // asynchronous autocomplete result and frequently reopens about:blank.
++  // The profile classifier preserves URL fixup, configured search providers,
++  // keywords, and intranet-name handling without depending on hidden UI state.
++  AutocompleteMatch match;
++  GURL alternate_nav_url;
++  classifier->Classify(
++      base::WideToUTF16(text), false, true,
++      metrics::OmniboxEventProto::OTHER, &match, &alternate_nav_url);
++  GURL destination_url = match.destination_url;
++  ui::PageTransition transition = match.transition;
++  TemplateURLService* template_url_service =
++      TemplateURLServiceFactory::GetForProfile(browser_->profile());
++  const TemplateURL* default_search_provider =
++      template_url_service
++          ? template_url_service->GetDefaultSearchProvider()
++          : nullptr;
++  const bool query_like_input = !LooksLikeExplicitNavigation(text);
++  if (!destination_url.is_valid() || query_like_input) {
++    // Ungoogled Chromium can expose a placeholder provider that turns search
++    // terms into an HTTP hostname. Prefer a real configured provider, but
++    // reject that classifier-equivalent placeholder before falling back to a
++    // usable search URL on a pristine profile.
++    GURL provider_url;
++    if (default_search_provider &&
++        default_search_provider->url_ref().SupportsReplacement(
++            template_url_service->search_terms_data())) {
++      TemplateURLRef::SearchTermsArgs search_terms(base::WideToUTF16(text));
++      provider_url = GURL(
++          default_search_provider->url_ref().ReplaceSearchTerms(
++              search_terms, template_url_service->search_terms_data()));
++    }
++    const bool usable_provider_url =
++        provider_url.is_valid() && provider_url.SchemeIsHTTPOrHTTPS() &&
++        !provider_url.host().empty() &&
++        provider_url != match.destination_url;
++    if (usable_provider_url) {
++      destination_url = provider_url;
++    } else {
++      destination_url = GURL("https://www.google.com/search?q=" +
++                             base::EscapeQueryParamValue(
++                                 base::WideToUTF8(text), true));
++    }
++    transition = ui::PAGE_TRANSITION_GENERATED;
++  }
++
++  content::OpenURLParams params(destination_url, content::Referrer(),
++                                WindowOpenDisposition::CURRENT_TAB,
++                                transition, false);
++  browser_->OpenURL(params, {});
++}
++
++void CurveBrowserNativeShellHostWin::OpenInternalPage(const GURL& url) {
++  content::OpenURLParams params(url, content::Referrer(),
++                                WindowOpenDisposition::CURRENT_TAB,
++                                ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
++  browser_->OpenURL(params, {});
++}
++
++void CurveBrowserNativeShellHostWin::InvokeCommand(
++    WcsCommand command,
++    int64_t tab_id,
++    int32_t tab_index,
++    std::wstring text,
++    uint32_t event_flags) {
++  if (!browser_) {
++    return;
++  }
++  TabStripModel* model = browser_->tab_strip_model();
++  tab_index = ResolveTabIndex(tab_id, tab_index);
++
++  switch (command) {
++    case WCS_COMMAND_NEW_TAB:
++      ExecuteBrowserCommand(IDC_NEW_TAB);
++      break;
++    case WCS_COMMAND_ACTIVATE_TAB:
++      if (tab_index != TabStripModel::kNoTab) {
++        model->ActivateTabAt(tab_index);
++      }
++      break;
++    case WCS_COMMAND_CLOSE_TAB:
++      if (tab_index != TabStripModel::kNoTab) {
++        model->CloseWebContentsAt(tab_index, UserCloseTypes());
++      }
++      break;
++    case WCS_COMMAND_DUPLICATE_TAB:
++      if (tab_index != TabStripModel::kNoTab) {
++        chrome::DuplicateTabAt(browser_, tab_index);
++      }
++      break;
++    case WCS_COMMAND_TOGGLE_PIN_TAB:
++      if (tab_index != TabStripModel::kNoTab) {
++        model->SetTabPinned(tab_index, !model->IsTabPinned(tab_index));
++      }
++      break;
++    case WCS_COMMAND_CLOSE_OTHER_TABS:
++      if (tab_index != TabStripModel::kNoTab) {
++        for (int index = model->count() - 1; index >= 0; --index) {
++          if (index != tab_index) {
++            model->CloseWebContentsAt(index, UserCloseTypes());
++          }
++        }
++      }
++      break;
++    case WCS_COMMAND_CLOSE_TABS_TO_RIGHT:
++      if (tab_index != TabStripModel::kNoTab) {
++        for (int index = model->count() - 1; index > tab_index; --index) {
++          model->CloseWebContentsAt(index, UserCloseTypes());
++        }
++      }
++      break;
++    case WCS_COMMAND_BACK:
++      ExecuteBrowserCommand(IDC_BACK);
++      break;
++    case WCS_COMMAND_FORWARD:
++      ExecuteBrowserCommand(IDC_FORWARD);
++      break;
++    case WCS_COMMAND_RELOAD:
++      if (tab_id >= 0 && tab_index != TabStripModel::kNoTab) {
++        model->GetWebContentsAt(tab_index)->GetController().Reload(
++            content::ReloadType::NORMAL, true);
++      } else {
++        ExecuteBrowserCommand(IDC_RELOAD);
++      }
++      break;
++    case WCS_COMMAND_STOP:
++      ExecuteBrowserCommand(IDC_STOP);
++      break;
++    case WCS_COMMAND_NAVIGATE:
++      if (!text.empty()) {
++        NavigateFromOmnibox(text);
++      }
++      break;
++    case WCS_COMMAND_HOME:
++      ExecuteBrowserCommand(IDC_HOME);
++      break;
++    case WCS_COMMAND_OPEN_HISTORY:
++      ExecuteBrowserCommand(IDC_SHOW_HISTORY);
++      break;
++    case WCS_COMMAND_OPEN_DOWNLOADS:
++      ExecuteBrowserCommand(IDC_SHOW_DOWNLOADS);
++      break;
++    case WCS_COMMAND_OPEN_BOOKMARKS:
++      ExecuteBrowserCommand(IDC_SHOW_BOOKMARK_MANAGER);
++      break;
++    case WCS_COMMAND_OPEN_EXTENSIONS:
++      ExecuteBrowserCommand(IDC_MANAGE_EXTENSIONS);
++      break;
++    case WCS_COMMAND_OPEN_PASSWORDS:
++      ExecuteBrowserCommand(IDC_SHOW_PASSWORD_MANAGER);
++      break;
++    case WCS_COMMAND_OPEN_SETTINGS:
++      ExecuteBrowserCommand(IDC_OPTIONS);
++      break;
++    case WCS_COMMAND_OPEN_PROFILES:
++      OpenInternalPage(GURL("chrome://settings/manageProfile"));
++      break;
++    case WCS_COMMAND_NEW_WINDOW:
++      ExecuteBrowserCommand(IDC_NEW_WINDOW);
++      break;
++    case WCS_COMMAND_NEW_INCOGNITO_WINDOW:
++      ExecuteBrowserCommand(IDC_NEW_INCOGNITO_WINDOW);
++      break;
++    case WCS_COMMAND_FIND:
++      ExecuteBrowserCommand(IDC_FIND);
++      break;
++    case WCS_COMMAND_PRINT:
++      if (model) {
++        printing::StartBasicPrint(model->GetActiveWebContents());
++      }
++      break;
++    case WCS_COMMAND_SAVE_PAGE:
++      ExecuteBrowserCommand(IDC_SAVE_PAGE);
++      break;
++    case WCS_COMMAND_ZOOM_IN:
++      ExecuteBrowserCommand(IDC_ZOOM_PLUS);
++      break;
++    case WCS_COMMAND_ZOOM_OUT:
++      ExecuteBrowserCommand(IDC_ZOOM_MINUS);
++      break;
++    case WCS_COMMAND_ZOOM_RESET:
++      ExecuteBrowserCommand(IDC_ZOOM_NORMAL);
++      break;
++    case WCS_COMMAND_TOGGLE_FULLSCREEN:
++      ExecuteBrowserCommand(IDC_FULLSCREEN);
++      break;
++    case WCS_COMMAND_OPEN_ABOUT:
++      ExecuteBrowserCommand(IDC_ABOUT);
++      break;
++    case WCS_COMMAND_EXIT:
++      ExecuteBrowserCommand(IDC_EXIT);
++      break;
++    case WCS_COMMAND_SET_RESTORE_ON_STARTUP: {
++      Profile* profile = browser_->profile();
++      if (!SessionStartupPref::TypeIsManaged(profile->GetPrefs())) {
++        const SessionStartupPref current =
++            SessionStartupPref::GetStartupPref(profile);
++        const bool keep_urls = current.ShouldOpenUrls();
++        SessionStartupPref replacement(
++            event_flags ? (keep_urls ? SessionStartupPref::LAST_AND_URLS
++                                     : SessionStartupPref::LAST)
++                        : (keep_urls ? SessionStartupPref::URLS
++                                     : SessionStartupPref::DEFAULT));
++        replacement.urls = current.urls;
++        SessionStartupPref::SetStartupPref(profile, replacement);
++        SyncState();
++      }
++      break;
++    }
++    case WCS_COMMAND_OPEN_SEARCH_SETTINGS:
++      OpenInternalPage(GURL("chrome://settings/search"));
++      break;
++    case WCS_COMMAND_BOOKMARK_PAGE:
++      ExecuteBrowserCommand(IDC_BOOKMARK_THIS_TAB);
++      break;
++    case WCS_COMMAND_SHOW_SITE_INFO:
++      if (LocationBarView* location_bar =
++              browser_view_->GetLocationBarView()) {
++        location_bar->ShowPageInfoDialog();
++      }
++      break;
++    case WCS_COMMAND_FOCUS_CONTENT:
++      // Restore both the active ContentsWebView in the Views focus manager and
++      // the renderer's stored focus. WebContents::Focus alone cannot take
++      // Win32 focus back from DesktopWindowXamlSource's InputSiteWindowClass.
++      if (views::WebView* contents_view =
++              browser_view_->GetActiveContentsWebView()) {
++        contents_view->RequestFocus();
++      }
++      browser_view_->RestoreFocus();
++      break;
++    case WCS_COMMAND_FIND_TEXT:
++    case WCS_COMMAND_FIND_NEXT:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        if (auto* helper =
++                find_in_page::FindTabHelper::FromWebContents(contents)) {
++          std::u16string query = base::WideToUTF16(text);
++          if (query.empty()) {
++            query = helper->find_text();
++          }
++          if (!query.empty()) {
++            helper->set_find_ui_active(true);
++            helper->StartFinding(
++                std::move(query),
++                command == WCS_COMMAND_FIND_TEXT || event_flags != 0,
++                false, true);
++          }
++        }
++      }
++      break;
++    case WCS_COMMAND_CLOSE_FIND:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        if (auto* helper =
++                find_in_page::FindTabHelper::FromWebContents(contents)) {
++          helper->StopFinding(find_in_page::SelectionAction::kKeep);
++          helper->set_find_ui_active(false);
++        }
++      }
++      break;
++    case WCS_COMMAND_OPEN_BOOKMARK:
++      if (!text.empty()) {
++        NavigateFromOmnibox(text);
++      }
++      break;
++    case WCS_COMMAND_RESTORE_SESSION:
++      SessionRestore::RestoreSessionAfterCrash(browser_);
++      break;
++    case WCS_COMMAND_OPEN_DOWNLOAD:
++    case WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER:
++      if (content::DownloadManager* manager =
++              browser_->profile()->GetDownloadManager()) {
++        if (download::DownloadItem* item =
++                manager->GetDownload(static_cast<uint32_t>(tab_id))) {
++          if (command == WCS_COMMAND_OPEN_DOWNLOAD) {
++            item->OpenDownload();
++          } else {
++            item->ShowDownloadInShell();
++          }
++        }
++      }
++      break;
++    case WCS_COMMAND_SAVE_BOOKMARK:
++      if (content::WebContents* contents = model->GetActiveWebContents()) {
++        bookmarks::BookmarkModel* bookmark_model =
++            BookmarkModelFactory::GetForBrowserContext(browser_->profile());
++        const GURL url = contents->GetVisibleURL();
++        if (bookmark_model && bookmark_model->loaded() && url.is_valid()) {
++          const bookmarks::BookmarkNode* node =
++              bookmark_model->GetMostRecentlyAddedUserNodeForURL(url);
++          if (event_flags != 0) {
++            std::u16string title = base::WideToUTF16(text);
++            if (title.empty()) {
++              title = contents->GetTitle();
++            }
++            if (node) {
++              bookmark_model->SetTitle(
++                  node, title, bookmarks::metrics::BookmarkEditSource::kUser);
++            } else {
++              const bookmarks::BookmarkNode* parent =
++                  bookmark_model->bookmark_bar_node();
++              bookmark_model->AddNewURL(parent, parent->children().size(),
++                                        title, url);
++            }
++          } else if (node) {
++            bookmark_model->Remove(
++                node, bookmarks::metrics::BookmarkEditSource::kUser,
++                FROM_HERE);
++          }
++          SyncState();
++        }
++      }
++      break;
++    case WCS_COMMAND_OPEN_SITE_SETTINGS: {
++      const GURL page_url(base::WideToUTF8(text));
++      const std::string site =
++          page_url.is_valid() ? page_url.DeprecatedGetOriginAsURL().spec()
++                              : std::string();
++      OpenInternalPage(GURL(
++          "chrome://settings/content/siteDetails?site=" +
++          base::EscapeQueryParamValue(site, /*use_plus=*/false)));
++      break;
++    }
++    case WCS_COMMAND_SET_DEFAULT_BROWSER:
++      ExecuteBrowserCommand(IDC_SET_BROWSER_AS_DEFAULT);
++      break;
++    case WCS_COMMAND_DISMISS_DEFAULT_BROWSER:
++      chrome::startup::default_prompt::UpdatePrefsForDismissedPrompt(
++          browser_->profile());
++      DefaultBrowserPromptManager::GetInstance()->CloseAllPrompts(
++          DefaultBrowserPromptManager::CloseReason::kDismiss);
++      break;
++  }
++}
+diff --git a/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/curve_browser_native_shell_host_win.h
+@@ -0,0 +1,98 @@
++// Copyright 2026 The Curve Browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
++
++#include <windows.h>
++
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "chrome/browser/ui/views/frame/curve_browser_shell_api_win.h"
++
++class Browser;
++class BrowserView;
++class GURL;
++
++namespace history {
++class QueryResults;
++}
++
++// Owns the optional in-process WinUI 3 shell for one normal browser window.
++// The DLL boundary intentionally contains no WinRT or WinUI types so Chromium
++// remains buildable and launchable without the Windows App SDK payload.
++class CurveBrowserNativeShellHostWin {
++ public:
++  CurveBrowserNativeShellHostWin(BrowserView* browser_view, Browser* browser);
++  CurveBrowserNativeShellHostWin(const CurveBrowserNativeShellHostWin&) =
++      delete;
++  CurveBrowserNativeShellHostWin& operator=(
++      const CurveBrowserNativeShellHostWin&) = delete;
++  ~CurveBrowserNativeShellHostWin();
++
++  bool Initialize();
++  bool is_active() const { return shell_ != nullptr; }
++  void SyncState();
++  void SetVisible(bool visible);
++  void ShowFind();
++  bool ShowRestorePrompt();
++  bool ShowDefaultBrowserPrompt(bool can_pin_to_taskbar);
++
++ private:
++  using GetApiVersionFn = uint32_t(__stdcall*)();
++  using CreateShellFn = HRESULT(__stdcall*)(HWND,
++                                            const WcsHostCallbacks*,
++                                            WcsShellHandle*);
++  using DestroyShellFn = void(__stdcall*)(WcsShellHandle);
++  using UpdateWindowStateFn = HRESULT(__stdcall*)(WcsShellHandle,
++                                                  const WcsWindowState*);
++  using SetVisibleFn = void(__stdcall*)(WcsShellHandle, BOOL);
++  using ShowFindFn = void(__stdcall*)(WcsShellHandle);
++  using ShowRestorePromptFn = void(__stdcall*)(WcsShellHandle);
++  using ShowDefaultBrowserPromptFn = void(__stdcall*)(WcsShellHandle, BOOL);
++
++  static void __stdcall InvokeCommandThunk(void* context,
++                                           const WcsCommandArgs* args);
++  void PostCommand(const WcsCommandArgs& args);
++  void InvokeCommand(WcsCommand command,
++                     int64_t tab_id,
++                     int32_t tab_index,
++                     std::wstring text,
++                     uint32_t event_flags);
++  int ResolveTabIndex(int64_t tab_id, int32_t tab_index) const;
++  void ExecuteBrowserCommand(int command_id);
++  void NavigateFromOmnibox(const std::wstring& text);
++  void OpenInternalPage(const GURL& url);
++  void MaybeQueryHistory(const GURL& active_url);
++  void OnHistoryQueryComplete(history::QueryResults results);
++  void Unload();
++
++  struct HistoryEntry {
++    std::wstring title;
++    std::wstring url;
++    std::wstring visit_time;
++  };
++
++  raw_ptr<BrowserView> browser_view_;
++  raw_ptr<Browser> browser_;
++  HMODULE module_ = nullptr;
++  WcsShellHandle shell_ = nullptr;
++  DestroyShellFn destroy_shell_ = nullptr;
++  UpdateWindowStateFn update_window_state_ = nullptr;
++  SetVisibleFn set_visible_ = nullptr;
++  ShowFindFn show_find_ = nullptr;
++  ShowRestorePromptFn show_restore_prompt_ = nullptr;
++  ShowDefaultBrowserPromptFn show_default_browser_prompt_ = nullptr;
++  std::vector<HistoryEntry> history_entries_;
++  base::CancelableTaskTracker history_task_tracker_;
++  bool history_query_started_ = false;
++  bool history_query_loading_ = false;
++  base::WeakPtrFactory<CurveBrowserNativeShellHostWin> weak_ptr_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_NATIVE_SHELL_HOST_WIN_H_
+diff --git a/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/curve_browser_shell_api_win.h
+@@ -0,0 +1,168 @@
++// Copyright 2026 The Curve Browser Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
++
++#include <stddef.h>
++#include <stdint.h>
++#include <windows.h>
++
++// Stable C ABI shared with curve_browser_shell.dll. Chromium resolves each
++// export dynamically so a missing or incompatible WinUI payload falls back to
++// the stock Views chrome instead of preventing the browser from starting.
++#define WCS_API_VERSION 11u
++
++typedef void* WcsShellHandle;
++
++typedef enum WcsCommand {
++  WCS_COMMAND_NEW_TAB = 1,
++  WCS_COMMAND_ACTIVATE_TAB = 2,
++  WCS_COMMAND_CLOSE_TAB = 3,
++  WCS_COMMAND_DUPLICATE_TAB = 4,
++  WCS_COMMAND_TOGGLE_PIN_TAB = 5,
++  WCS_COMMAND_CLOSE_OTHER_TABS = 6,
++  WCS_COMMAND_CLOSE_TABS_TO_RIGHT = 7,
++  WCS_COMMAND_BACK = 10,
++  WCS_COMMAND_FORWARD = 11,
++  WCS_COMMAND_RELOAD = 12,
++  WCS_COMMAND_STOP = 13,
++  WCS_COMMAND_NAVIGATE = 14,
++  WCS_COMMAND_HOME = 15,
++  WCS_COMMAND_OPEN_HISTORY = 20,
++  WCS_COMMAND_OPEN_DOWNLOADS = 21,
++  WCS_COMMAND_OPEN_BOOKMARKS = 22,
++  WCS_COMMAND_OPEN_EXTENSIONS = 23,
++  WCS_COMMAND_OPEN_PASSWORDS = 24,
++  WCS_COMMAND_OPEN_SETTINGS = 25,
++  WCS_COMMAND_OPEN_PROFILES = 26,
++  WCS_COMMAND_NEW_WINDOW = 30,
++  WCS_COMMAND_NEW_INCOGNITO_WINDOW = 31,
++  WCS_COMMAND_FIND = 32,
++  WCS_COMMAND_PRINT = 33,
++  WCS_COMMAND_SAVE_PAGE = 34,
++  WCS_COMMAND_ZOOM_IN = 35,
++  WCS_COMMAND_ZOOM_OUT = 36,
++  WCS_COMMAND_ZOOM_RESET = 37,
++  WCS_COMMAND_TOGGLE_FULLSCREEN = 38,
++  WCS_COMMAND_OPEN_ABOUT = 39,
++  WCS_COMMAND_EXIT = 40,
++  WCS_COMMAND_SET_RESTORE_ON_STARTUP = 41,
++  WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
++  WCS_COMMAND_BOOKMARK_PAGE = 43,
++  WCS_COMMAND_SHOW_SITE_INFO = 44,
++  WCS_COMMAND_FOCUS_CONTENT = 45,
++  WCS_COMMAND_FIND_TEXT = 46,
++  WCS_COMMAND_FIND_NEXT = 47,
++  WCS_COMMAND_CLOSE_FIND = 48,
++  WCS_COMMAND_OPEN_BOOKMARK = 49,
++  WCS_COMMAND_RESTORE_SESSION = 50,
++  WCS_COMMAND_OPEN_DOWNLOAD = 51,
++  WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
++  WCS_COMMAND_SAVE_BOOKMARK = 53,
++  WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
++  WCS_COMMAND_SET_DEFAULT_BROWSER = 55,
++  WCS_COMMAND_DISMISS_DEFAULT_BROWSER = 56,
++} WcsCommand;
++
++typedef struct WcsCommandArgs {
++  uint32_t size;
++  WcsCommand command;
++  int64_t tab_id;
++  int32_t tab_index;
++  const wchar_t* text;
++  uint32_t event_flags;
++} WcsCommandArgs;
++
++typedef void(__stdcall* WcsInvokeCommand)(void* context,
++                                          const WcsCommandArgs* args);
++
++typedef struct WcsHostCallbacks {
++  uint32_t size;
++  uint32_t api_version;
++  void* context;
++  WcsInvokeCommand invoke_command;
++} WcsHostCallbacks;
++
++typedef struct WcsTabState {
++  uint32_t size;
++  int64_t tab_id;
++  int32_t index;
++  const wchar_t* title;
++  const wchar_t* url;
++  const wchar_t* favicon_url;
++  int32_t active;
++  int32_t pinned;
++  int32_t loading;
++  int32_t audible;
++  int32_t muted;
++} WcsTabState;
++
++typedef struct WcsBookmarkState {
++  uint32_t size;
++  const wchar_t* title;
++  const wchar_t* url;
++  int32_t is_folder;
++} WcsBookmarkState;
++
++typedef struct WcsHistoryEntryState {
++  uint32_t size;
++  const wchar_t* title;
++  const wchar_t* url;
++  const wchar_t* visit_time;
++} WcsHistoryEntryState;
++
++typedef struct WcsDownloadState {
++  uint32_t size;
++  uint32_t id;
++  const wchar_t* title;
++  const wchar_t* url;
++  const wchar_t* target_path;
++  const wchar_t* status;
++  int32_t complete;
++  int32_t in_progress;
++} WcsDownloadState;
++
++typedef struct WcsWindowState {
++  uint32_t size;
++  const WcsTabState* tabs;
++  size_t tab_count;
++  int32_t active_index;
++  int32_t can_go_back;
++  int32_t can_go_forward;
++  int32_t is_incognito;
++  const wchar_t* profile_name;
++  int32_t restore_on_startup;
++  const WcsBookmarkState* bookmarks;
++  size_t bookmark_count;
++  int32_t bookmark_bar_visible;
++  const WcsBookmarkState* bookmark_library;
++  size_t bookmark_library_count;
++  const WcsHistoryEntryState* history_entries;
++  size_t history_entry_count;
++  int32_t history_loading;
++  const WcsDownloadState* downloads;
++  size_t download_count;
++  int32_t active_page_bookmarked;
++} WcsWindowState;
++
++typedef enum WcsContextMenuItemType {
++  WCS_CONTEXT_MENU_COMMAND = 0,
++  WCS_CONTEXT_MENU_SEPARATOR = 1,
++  WCS_CONTEXT_MENU_SUBMENU = 2,
++  WCS_CONTEXT_MENU_CHECK = 3,
++  WCS_CONTEXT_MENU_RADIO = 4,
++} WcsContextMenuItemType;
++
++typedef struct WcsContextMenuItem {
++  uint32_t size;
++  WcsContextMenuItemType type;
++  int32_t command_id;
++  int32_t parent_index;
++  const wchar_t* label;
++  int32_t enabled;
++  int32_t checked;
++} WcsContextMenuItem;
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_CURVE_BROWSER_SHELL_API_WIN_H_
+diff --git a/chrome/browser/ui/views/session_crashed_bubble_view.cc b/chrome/browser/ui/views/session_crashed_bubble_view.cc
+--- a/chrome/browser/ui/views/session_crashed_bubble_view.cc
++++ b/chrome/browser/ui/views/session_crashed_bubble_view.cc
+@@ -258,6 +258,14 @@ void SessionCrashedBubbleView::Show(
+
+   if (browser && (skip_tab_checking ||
+                   browser->GetTabStripModel()->GetActiveWebContents())) {
++#if BUILDFLAG(IS_WIN)
++    if (BrowserView* browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser);
++        browser_view && browser_view->ShowCurveBrowserRestorePrompt()) {
++      RecordBubbleHistogramValue(SESSION_CRASHED_BUBBLE_SHOWN);
++      return;
++    }
++#endif
+     ShowBubble(browser, uma_opted_in_already, offer_uma_optin);
+     return;
+   }
+diff --git a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
+--- a/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
++++ b/chrome/browser/ui/views/renderer_context_menu/render_view_context_menu_views.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+@@ -13,10 +14,17 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/observer_list.h"
+ #include "base/scoped_observation.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/task/current_thread.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_WIN)
++#include <windows.h>
++#endif
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/ui/views/frame/curve_browser_shell_api_win.h"
++#endif
+ #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
+ #include "chrome/common/chrome_switches.h"
+ #include "components/lens/buildflags.h"
+@@ -40,9 +48,94 @@
+ #include "ui/views/view.h"
+ #include "ui/views/view_observer.h"
+ #include "ui/views/widget/widget.h"
++#if BUILDFLAG(IS_WIN)
++#include "ui/views/win/hwnd_util.h"
++#endif
+
+ using content::WebContents;
+
++#if BUILDFLAG(IS_WIN)
++namespace {
++
++void PopulateWinUiContextMenu(std::vector<WcsContextMenuItem>* items,
++                              std::vector<std::wstring>* labels,
++                              const ui::MenuModel* model,
++                              int32_t parent_index) {
++  for (size_t index = 0; index < model->GetItemCount(); ++index) {
++    if (!model->IsVisibleAt(index)) {
++      continue;
++    }
++    const ui::MenuModel::ItemType type = model->GetTypeAt(index);
++    if (type == ui::MenuModel::TYPE_BUTTON_ITEM) {
++      continue;
++    }
++
++    WcsContextMenuItem item{};
++    item.size = sizeof(item);
++    item.command_id = model->GetCommandIdAt(index);
++    item.parent_index = parent_index;
++    item.enabled = model->IsEnabledAt(index) &&
++                   type != ui::MenuModel::TYPE_TITLE;
++    item.checked =
++        (type == ui::MenuModel::TYPE_CHECK ||
++         type == ui::MenuModel::TYPE_RADIO) &&
++        model->IsItemCheckedAt(index);
++    if (type == ui::MenuModel::TYPE_SEPARATOR) {
++      item.type = WCS_CONTEXT_MENU_SEPARATOR;
++    } else if (type == ui::MenuModel::TYPE_SUBMENU ||
++               type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU) {
++      item.type = WCS_CONTEXT_MENU_SUBMENU;
++    } else if (type == ui::MenuModel::TYPE_CHECK) {
++      item.type = WCS_CONTEXT_MENU_CHECK;
++    } else if (type == ui::MenuModel::TYPE_RADIO) {
++      item.type = WCS_CONTEXT_MENU_RADIO;
++    } else {
++      item.type = WCS_CONTEXT_MENU_COMMAND;
++    }
++
++    const int32_t item_index = static_cast<int32_t>(items->size());
++    items->push_back(item);
++    labels->push_back(base::UTF16ToWide(model->GetLabelAt(index)));
++    if (type == ui::MenuModel::TYPE_SUBMENU ||
++        type == ui::MenuModel::TYPE_ACTIONABLE_SUBMENU) {
++      if (const ui::MenuModel* submenu_model =
++              model->GetSubmenuModelAt(index)) {
++        PopulateWinUiContextMenu(items, labels, submenu_model, item_index);
++      }
++    }
++  }
++}
++
++int RunWinUiContextMenu(HWND owner,
++                        const gfx::Point& screen_point,
++                        const ui::MenuModel* model) {
++  const auto shell = reinterpret_cast<WcsShellHandle>(
++      GetPropW(owner, L"CurveBrowserNativeShellActive"));
++  HMODULE module = GetModuleHandleW(L"curve_browser_shell.dll");
++  if (!shell || !module) {
++    return -1;
++  }
++  using ShowContextMenuFn = int32_t(__stdcall*)(
++      WcsShellHandle, const WcsContextMenuItem*, size_t, int32_t, int32_t);
++  const auto show_context_menu = reinterpret_cast<ShowContextMenuFn>(
++      GetProcAddress(module, "WcsShowContextMenu"));
++  if (!show_context_menu) {
++    return -1;
++  }
++
++  std::vector<WcsContextMenuItem> items;
++  std::vector<std::wstring> labels;
++  PopulateWinUiContextMenu(&items, &labels, model, -1);
++  for (size_t index = 0; index < items.size(); ++index) {
++    items[index].label = labels[index].c_str();
++  }
++  return show_context_menu(shell, items.data(), items.size(),
++                           screen_point.x(), screen_point.y());
++}
++
++}  // namespace
++#endif
++
+ class RenderViewContextMenuViews::SubmenuViewObserver
+     : public views::ViewObserver,
+       public views::WidgetObserver {
+@@ -399,6 +492,18 @@ void RenderViewContextMenuViews::Show() {
+   if (screen_position_client) {
+     screen_position_client->ConvertPointToScreen(target_window, &screen_point);
+   }
++#if BUILDFLAG(IS_WIN)
++  HWND owner = views::HWNDForWidget(top_level_widget);
++  if (owner && GetPropW(owner, L"CurveBrowserNativeShellActive")) {
++    base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
++    if (const int command =
++            RunWinUiContextMenu(owner, screen_point, &menu_model());
++        command >= 0) {
++      ExecuteCommand(command, 0);
++    }
++    return;
++  }
++#endif
+   // Enable recursive tasks on the message loop so we can get updates while
+   // the context menu is being displayed.
+   base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;

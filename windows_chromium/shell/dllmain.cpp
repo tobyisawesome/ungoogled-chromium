@@ -1,0 +1,11 @@
+// Copyright 2026 The Curve Browser Authors
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "pch.h"
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*) {
+  if (reason == DLL_PROCESS_ATTACH) {
+    DisableThreadLibraryCalls(instance);
+  }
+  return TRUE;
+}

@@ -11,7 +11,7 @@ Module for cloning the source tree.
 import re
 import sys
 from argparse import ArgumentParser
-from os import environ, pathsep
+from os import chdir, environ, pathsep
 from pathlib import Path
 from shutil import copytree, copy, move
 from stat import S_IWRITE
@@ -49,6 +49,19 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     """Clones, downloads, and generates the required sources"""
     get_logger().info('Setting up cloning environment')
     iswin = sys.platform.startswith('win')
+    # depot_tools uses ':' as a delimiter in GCS dependency names. An absolute
+    # Windows solution name such as ``C:/build/src`` is therefore truncated to
+    # ``C`` when node_modules is unpacked. Anchor the process at the output
+    # parent and keep the gclient solution name relative instead.
+    if iswin and args.output.is_absolute():
+        output = args.output.expanduser().resolve()
+        if not output.name:
+            raise ValueError('The Chromium output must not be a drive root')
+        if args.custom_config:
+            args.custom_config = args.custom_config.expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        chdir(output.parent)
+        args.output = Path(output.name)
     chromium_version = get_chromium_version()
     ucstaging = args.output / 'uc_staging'
     dtpath = ucstaging / 'depot_tools'
@@ -102,10 +115,15 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     if iswin:
         (dtpath / 'git.bat').write_text('git')
     # Apply changes to gclient
+    # Use slash-safe literals in the generated Python patch. On Windows the
+    # output path has already been made relative so it cannot collide with the
+    # GCS dependency-name delimiter.
+    gclient_output = args.output.as_posix()
+    gclient_staging = ucstaging.as_posix()
     run(['git', 'apply', '--ignore-whitespace'],
         input=Path(__file__).with_name('depot_tools.patch').read_text(encoding=ENCODING).replace(
-            'UC_OUT', str(args.output)).replace('UC_STAGING',
-                                                str(ucstaging)).replace('GSUVER', gsuver),
+            'UC_OUT', gclient_output).replace('UC_STAGING', gclient_staging).replace(
+                'GSUVER', gsuver),
         cwd=dtpath,
         check=True,
         universal_newlines=True)
@@ -148,10 +166,16 @@ def clone(args): # pylint: disable=too-many-branches, too-many-locals, too-many-
     run(['git', 'clean', '-ffdx'], cwd=gnpath, check=True)
 
     get_logger().info('Running gsync')
+    # .gclient is executable Python. POSIX separators avoid turning Windows
+    # paths such as ``C:\\Users`` into invalid escape sequences (notably
+    # ``\\U``) while remaining valid for depot_tools on Windows.
     if args.custom_config:
-        copy(args.custom_config, ucstaging / '.gclient').replace('UC_OUT', str(args.output))
+        custom_config = Path(args.custom_config).read_text(encoding=ENCODING)
+        (ucstaging / '.gclient').write_text(
+            custom_config.replace('UC_OUT', gclient_output), encoding=ENCODING)
     else:
-        (ucstaging / '.gclient').write_text(GC_CONFIG.replace('UC_OUT', str(args.output)))
+        (ucstaging / '.gclient').write_text(
+            GC_CONFIG.replace('UC_OUT', gclient_output), encoding=ENCODING)
     gcpath = dtpath / 'gclient'
     if iswin:
         gcpath = gcpath.with_suffix('.bat')

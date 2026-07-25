@@ -1,0 +1,404 @@
+// Copyright 2026 The Curve Browser Authors
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include <windows.h>
+#include <dwmapi.h>
+
+#include <array>
+#include <cstdio>
+#include <string>
+
+#include "windows_chromium_shell_api.h"
+
+namespace {
+
+using GetApiVersion = uint32_t(__stdcall*)();
+using CreateShell = HRESULT(__stdcall*)(HWND, const WcsHostCallbacks*,
+                                        WcsShellHandle*);
+using DestroyShell = void(__stdcall*)(WcsShellHandle);
+using UpdateWindowState = HRESULT(__stdcall*)(WcsShellHandle,
+                                              const WcsWindowState*);
+using CaptureShell = HRESULT(__stdcall*)(WcsShellHandle, const wchar_t*);
+using SetVisualStateForTesting = void(__stdcall*)(WcsShellHandle,
+                                                  const wchar_t*);
+using ShowFind = void(__stdcall*)(WcsShellHandle);
+using ShowRestorePrompt = void(__stdcall*)(WcsShellHandle);
+using ShowDefaultBrowserPrompt = void(__stdcall*)(WcsShellHandle, BOOL);
+
+HMODULE g_shell_module = nullptr;
+WcsShellHandle g_shell = nullptr;
+UpdateWindowState g_update = nullptr;
+DestroyShell g_destroy = nullptr;
+CaptureShell g_capture = nullptr;
+SetVisualStateForTesting g_set_visual_state = nullptr;
+ShowFind g_show_find = nullptr;
+ShowRestorePrompt g_show_restore_prompt = nullptr;
+ShowDefaultBrowserPrompt g_show_default_browser_prompt = nullptr;
+std::wstring g_capture_path;
+
+constexpr int kShellHeightDip = 96;
+
+std::array<std::wstring, 3> g_titles = {
+    L"Curve Browser", L"WinUI 3 documentation", L"Settings"};
+std::array<std::wstring, 3> g_urls = {
+    L"https://curvebrowser.local/", L"https://learn.microsoft.com/windows/apps/winui/",
+    L"chrome://settings/"};
+int g_active = 0;
+bool g_restore_on_startup = true;
+bool g_page_bookmarked = false;
+std::wstring g_download_action_status = L"Completed";
+std::wstring g_visual_state;
+bool g_open_find = false;
+bool g_open_restore_prompt = false;
+bool g_open_default_browser_prompt = false;
+
+void PushState() {
+  std::array<WcsTabState, 3> tabs{};
+  for (int index = 0; index < 3; ++index) {
+    tabs[index] = WcsTabState{sizeof(WcsTabState),
+                              index + 1,
+                              index,
+                              g_titles[index].c_str(),
+                              g_urls[index].c_str(),
+                              L"",
+                              index == g_active,
+                              index == 0,
+                              index == 1,
+                              0,
+                              0};
+  }
+  const std::array<WcsBookmarkState, 2> bookmarks{{
+      {sizeof(WcsBookmarkState), L"Curve Browser", L"https://example.com/", 0},
+      {sizeof(WcsBookmarkState), L"Bookmarks", L"", 1},
+  }};
+  const std::array<WcsBookmarkState, 4> bookmark_library{{
+      {sizeof(WcsBookmarkState), L"Bookmarks bar", L"", 1},
+      {sizeof(WcsBookmarkState), L"Curve Browser", L"https://example.com/", 0},
+      {sizeof(WcsBookmarkState), L"Windows App SDK",
+       L"https://learn.microsoft.com/windows/apps/windows-app-sdk/", 0},
+      {sizeof(WcsBookmarkState), L"Other bookmarks", L"", 1},
+  }};
+  const std::array<WcsHistoryEntryState, 3> history{{
+      {sizeof(WcsHistoryEntryState), L"Curve Browser",
+       L"https://curvebrowser.local/", L"Today, 10:32 AM"},
+      {sizeof(WcsHistoryEntryState), L"Windows App SDK documentation",
+       L"https://learn.microsoft.com/windows/apps/windows-app-sdk/",
+       L"Today, 10:18 AM"},
+      {sizeof(WcsHistoryEntryState), L"Example Domain",
+       L"https://example.com/", L"Yesterday, 8:42 PM"},
+  }};
+  const std::array<WcsDownloadState, 2> downloads{{
+      {sizeof(WcsDownloadState), 101, L"CurveBrowserSetup.exe",
+       L"https://curvebrowser.local/downloads/CurveBrowserSetup.exe",
+       L"C:\\Users\\Owner\\Downloads\\CurveBrowserSetup.exe",
+       g_download_action_status.c_str(), 1, 0},
+      {sizeof(WcsDownloadState), 102, L"WindowsAppSDK.zip",
+       L"https://example.com/WindowsAppSDK.zip",
+       L"C:\\Users\\Owner\\Downloads\\WindowsAppSDK.zip",
+       L"Downloading \u00b7 62%", 0, 1},
+  }};
+  WcsWindowState state{sizeof(WcsWindowState), tabs.data(), tabs.size(),
+                       g_active, 1, 0, 0, L"Local profile",
+                       g_restore_on_startup ? 1 : 0, bookmarks.data(),
+                       bookmarks.size(), 1, bookmark_library.data(),
+                       bookmark_library.size(), history.data(), history.size(),
+                       0, downloads.data(), downloads.size(),
+                       g_page_bookmarked ? 1 : 0};
+  if (g_update && g_shell) {
+    g_update(g_shell, &state);
+  }
+}
+
+void __stdcall OnCommand(void*, const WcsCommandArgs* args) {
+  if (!args) {
+    return;
+  }
+  if (args->command == WCS_COMMAND_ACTIVATE_TAB) {
+    g_active = static_cast<int>(args->tab_id - 1);
+    PushState();
+  } else if (args->command == WCS_COMMAND_NAVIGATE && args->text) {
+    g_urls[g_active] = args->text;
+    g_titles[g_active] = args->text;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_SETTINGS) {
+    g_active = 2;
+    g_titles[g_active] = L"Settings";
+    g_urls[g_active] = L"chrome://settings/";
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_PROFILES) {
+    g_active = 2;
+    g_titles[g_active] = L"Profiles";
+    g_urls[g_active] = L"chrome://settings/manageProfile";
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_ABOUT) {
+    g_active = 2;
+    g_titles[g_active] = L"About Curve Browser";
+    g_urls[g_active] = L"chrome://settings/help";
+    PushState();
+  } else if (args->command == WCS_COMMAND_SET_RESTORE_ON_STARTUP) {
+    g_restore_on_startup = args->event_flags != 0;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_BOOKMARK && args->text) {
+    g_urls[g_active] = args->text;
+    g_titles[g_active] = args->text;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_DOWNLOAD) {
+    g_download_action_status = L"Open requested";
+    PushState();
+  } else if (args->command == WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER) {
+    g_download_action_status = L"Folder requested";
+    PushState();
+  } else if (args->command == WCS_COMMAND_SAVE_BOOKMARK) {
+    g_page_bookmarked = args->event_flags != 0;
+    PushState();
+  } else if (args->command == WCS_COMMAND_OPEN_SITE_SETTINGS) {
+    g_urls[g_active] = L"chrome://settings/content/siteDetails";
+    g_titles[g_active] = L"Site settings";
+    PushState();
+  }
+}
+
+LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
+                            LPARAM lparam) {
+  switch (message) {
+    case WM_TIMER:
+      if (wparam == 1 && g_capture && g_shell && !g_capture_path.empty()) {
+        std::fwprintf(stderr, L"Capturing WinUI shell to %ls\n",
+                      g_capture_path.c_str());
+        KillTimer(window, 1);
+        const HRESULT result = g_capture(g_shell, g_capture_path.c_str());
+        if (FAILED(result)) {
+          std::fwprintf(stderr, L"WcsCaptureShell failed: 0x%08X\n",
+                        static_cast<unsigned int>(result));
+        }
+      } else if (wparam == 2 && !g_visual_state.empty()) {
+        KillTimer(window, 2);
+        if (g_set_visual_state && g_shell) {
+          g_set_visual_state(g_shell, g_visual_state.c_str());
+        }
+      } else if (wparam == 3) {
+        // Wait until the island has a live XamlRoot before opening a popup.
+        // ContentDialog and Flyout deliberately reject an unattached root.
+        KillTimer(window, 3);
+        if (g_open_find && g_show_find && g_shell) {
+          g_show_find(g_shell);
+        }
+        if (g_open_restore_prompt && g_show_restore_prompt && g_shell) {
+          g_show_restore_prompt(g_shell);
+        }
+        if (g_open_default_browser_prompt &&
+            g_show_default_browser_prompt && g_shell) {
+          g_show_default_browser_prompt(g_shell, TRUE);
+        }
+      }
+      return 0;
+    case WM_PAINT: {
+      PAINTSTRUCT paint{};
+      HDC dc = BeginPaint(window, &paint);
+      RECT client{};
+      GetClientRect(window, &client);
+      const int shell_height =
+          MulDiv(kShellHeightDip, GetDpiForWindow(window), 96);
+      BOOL dark = FALSE;
+      DwmGetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
+                            sizeof(dark));
+      // A transparent XAML island reveals the real parent backdrop in the
+      // browser. Some GDI/Windows.Graphics.Capture paths flatten that backdrop
+      // to white in this standalone host, so provide a theme-matched backing
+      // color for faithful visual-regression screenshots.
+      HBRUSH shell_background = CreateSolidBrush(
+          dark ? RGB(32, 32, 32) : RGB(243, 243, 243));
+      RECT shell_background_rect{0, 0, client.right, shell_height};
+      FillRect(dc, &shell_background_rect, shell_background);
+      DeleteObject(shell_background);
+      HBRUSH background = CreateSolidBrush(RGB(250, 250, 250));
+      RECT content_background{0, shell_height, client.right, client.bottom};
+      FillRect(dc, &content_background, background);
+      DeleteObject(background);
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, RGB(72, 72, 72));
+      RECT message_rect{48, 150, client.right - 48, client.bottom - 48};
+      DrawTextW(dc,
+                L"Chromium web content renders in this area.\n\nThis preview "
+                L"is the real in-process WinUI 3 shell DLL running inside a "
+                L"Win32 host.",
+                -1, &message_rect, DT_LEFT | DT_TOP | DT_WORDBREAK);
+      EndPaint(window, &paint);
+      return 0;
+    }
+    case WM_DESTROY:
+      PostQuitMessage(0);
+      return 0;
+  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+}  // namespace
+
+int wmain(int argc, wchar_t** argv) {
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  WNDCLASSEXW window_class{sizeof(window_class)};
+  window_class.lpfnWndProc = WindowProc;
+  window_class.hInstance = instance;
+  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  window_class.lpszClassName = L"CurveBrowserShellPreview";
+  // Leave the shell region unpainted so its transparent XAML base reveals
+  // the parent's DWM Mica Alt backdrop. Chromium uses the same contract when
+  // the native shell replaces the Views toolbar; the page area remains
+  // explicitly painted below it.
+  window_class.hbrBackground = nullptr;
+  if (!RegisterClassExW(&window_class)) {
+    return static_cast<int>(GetLastError());
+  }
+
+  HWND window = CreateWindowExW(
+      0, window_class.lpszClassName, L"Curve Browser — WinUI 3 Shell Preview",
+      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr,
+      nullptr, instance, nullptr);
+  if (!window) {
+    return static_cast<int>(GetLastError());
+  }
+
+  g_shell_module = LoadLibraryW(L"curve_browser_shell.dll");
+  if (!g_shell_module) {
+    std::fwprintf(stderr, L"LoadLibrary failed: %lu\n", GetLastError());
+    return static_cast<int>(GetLastError());
+  }
+  const auto get_version = reinterpret_cast<GetApiVersion>(
+      GetProcAddress(g_shell_module, "WcsGetApiVersion"));
+  const auto create = reinterpret_cast<CreateShell>(
+      GetProcAddress(g_shell_module, "WcsCreateShell"));
+  g_capture = reinterpret_cast<CaptureShell>(
+      GetProcAddress(g_shell_module, "WcsCaptureShell"));
+  g_set_visual_state = reinterpret_cast<SetVisualStateForTesting>(
+      GetProcAddress(g_shell_module, "WcsSetVisualStateForTesting"));
+  g_show_find = reinterpret_cast<ShowFind>(
+      GetProcAddress(g_shell_module, "WcsShowFind"));
+  g_show_restore_prompt = reinterpret_cast<ShowRestorePrompt>(
+      GetProcAddress(g_shell_module, "WcsShowRestorePrompt"));
+  g_show_default_browser_prompt =
+      reinterpret_cast<ShowDefaultBrowserPrompt>(
+          GetProcAddress(g_shell_module, "WcsShowDefaultBrowserPrompt"));
+  g_update = reinterpret_cast<UpdateWindowState>(
+      GetProcAddress(g_shell_module, "WcsUpdateWindowState"));
+  g_destroy = reinterpret_cast<DestroyShell>(
+      GetProcAddress(g_shell_module, "WcsDestroyShell"));
+  if (!get_version || get_version() != WCS_API_VERSION || !create ||
+      !g_update || !g_destroy || !g_capture || !g_set_visual_state ||
+      !g_show_find || !g_show_restore_prompt ||
+      !g_show_default_browser_prompt) {
+    std::fwprintf(stderr, L"Shell API mismatch\n");
+    return ERROR_REVISION_MISMATCH;
+  }
+
+  WcsHostCallbacks callbacks{sizeof(WcsHostCallbacks), WCS_API_VERSION, nullptr,
+                             &OnCommand};
+  const HRESULT result = create(window, &callbacks, &g_shell);
+  if (FAILED(result)) {
+    std::fwprintf(stderr, L"WcsCreateShell failed: 0x%08X\n",
+                  static_cast<unsigned int>(result));
+    return result;
+  }
+  int option_index = 1;
+  if (argc > 1 && wcsncmp(argv[1], L"--", 2) != 0) {
+    g_capture_path = argv[1];
+    option_index = 2;
+  }
+  for (int index = option_index; index < argc; ++index) {
+    const wchar_t* option = argv[index];
+    if (_wcsicmp(option, L"--profiles") == 0) {
+      g_active = 2;
+      g_titles[g_active] = L"Profiles";
+      g_urls[g_active] = L"chrome://settings/manageProfile";
+    } else if (_wcsicmp(option, L"--about") == 0) {
+      g_active = 2;
+      g_titles[g_active] = L"About Curve Browser";
+      g_urls[g_active] = L"chrome://settings/help";
+    } else if (_wcsicmp(option, L"--bookmarks") == 0) {
+      g_active = 2;
+      g_titles[g_active] = L"Bookmarks";
+      g_urls[g_active] = L"chrome://bookmarks/";
+    } else if (_wcsicmp(option, L"--history") == 0) {
+      g_active = 2;
+      g_titles[g_active] = L"History";
+      g_urls[g_active] = L"chrome://history/";
+    } else if (_wcsicmp(option, L"--downloads") == 0) {
+      g_active = 2;
+      g_titles[g_active] = L"Downloads";
+      g_urls[g_active] = L"chrome://downloads/";
+    } else if (_wcsicmp(option, L"--active-middle") == 0) {
+      g_active = 1;
+    } else if (_wcsicmp(option, L"--active-last") == 0) {
+      g_active = 2;
+    } else if (_wcsicmp(option, L"--hover-security") == 0) {
+      g_visual_state = L"security-pointer-over";
+    } else if (_wcsicmp(option, L"--press-security") == 0) {
+      g_visual_state = L"security-pressed";
+    } else if (_wcsicmp(option, L"--focus-security") == 0) {
+      g_visual_state = L"security-keyboard-focus";
+    } else if (_wcsicmp(option, L"--hover-favorite") == 0) {
+      g_visual_state = L"favorite-pointer-over";
+    } else if (_wcsicmp(option, L"--press-favorite") == 0) {
+      g_visual_state = L"favorite-pressed";
+    } else if (_wcsicmp(option, L"--focus-favorite") == 0) {
+      g_visual_state = L"favorite-keyboard-focus";
+    } else if (_wcsicmp(option, L"--focus-address") == 0) {
+      g_visual_state = L"address-keyboard-focus";
+    } else if (_wcsicmp(option, L"--focus-selected") == 0) {
+      g_visual_state = L"selected-keyboard-focus";
+    } else if (_wcsicmp(option, L"--visual-normal") == 0) {
+      g_visual_state = L"normal";
+    } else if (_wcsicmp(option, L"--hover-selected") == 0) {
+      g_visual_state = L"selected-pointer-over";
+    } else if (_wcsicmp(option, L"--press-selected") == 0) {
+      g_visual_state = L"selected-pressed";
+    } else if (_wcsicmp(option, L"--hover-unselected") == 0) {
+      g_visual_state = L"unselected-pointer-over";
+    } else if (_wcsicmp(option, L"--press-unselected") == 0) {
+      g_visual_state = L"unselected-pressed";
+    } else if (_wcsicmp(option, L"--hover-add") == 0) {
+      g_visual_state = L"add-pointer-over";
+    } else if (_wcsicmp(option, L"--find") == 0) {
+      g_open_find = true;
+    } else if (_wcsicmp(option, L"--restore-prompt") == 0) {
+      g_open_restore_prompt = true;
+    } else if (_wcsicmp(option, L"--default-browser-prompt") == 0) {
+      g_open_default_browser_prompt = true;
+    } else if (_wcsicmp(option, L"--prompt-race") == 0) {
+      g_open_restore_prompt = true;
+      g_open_default_browser_prompt = true;
+    }
+  }
+  PushState();
+
+  ShowWindow(window, SW_SHOWDEFAULT);
+  UpdateWindow(window);
+  if (g_open_find || g_open_restore_prompt ||
+      g_open_default_browser_prompt) {
+    SetTimer(window, 3, 500, nullptr);
+  }
+  if (!g_visual_state.empty()) {
+    SetTimer(window, 2, 350, nullptr);
+  }
+  if (!g_capture_path.empty()) {
+    const UINT_PTR timer =
+        SetTimer(window, 1, !g_visual_state.empty() ? 1000 : 750, nullptr);
+    std::fwprintf(stderr, L"WinUI capture timer: %llu\n",
+                  static_cast<unsigned long long>(timer));
+  }
+
+  MSG message{};
+  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    if (message.hwnd == window && message.message == WM_TIMER) {
+      DispatchMessageW(&message);
+      continue;
+    }
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+  }
+
+  g_destroy(g_shell);
+  g_shell = nullptr;
+  FreeLibrary(g_shell_module);
+  return static_cast<int>(message.wParam);
+}

@@ -1,0 +1,212 @@
+// Copyright 2026 The Curve Browser Authors
+// SPDX-License-Identifier: BSD-3-Clause
+
+#ifndef WINDOWS_CHROMIUM_SHELL_WINDOWS_CHROMIUM_SHELL_API_H_
+#define WINDOWS_CHROMIUM_SHELL_WINDOWS_CHROMIUM_SHELL_API_H_
+
+#include <stddef.h>
+#include <stdint.h>
+#include <windows.h>
+
+#if defined(WINDOWS_CHROMIUM_SHELL_IMPLEMENTATION)
+#define WCS_EXPORT __declspec(dllexport)
+#else
+#define WCS_EXPORT __declspec(dllimport)
+#endif
+
+#define WCS_API_VERSION 11u
+
+typedef void* WcsShellHandle;
+
+typedef enum WcsCommand {
+  WCS_COMMAND_NEW_TAB = 1,
+  WCS_COMMAND_ACTIVATE_TAB = 2,
+  WCS_COMMAND_CLOSE_TAB = 3,
+  WCS_COMMAND_DUPLICATE_TAB = 4,
+  WCS_COMMAND_TOGGLE_PIN_TAB = 5,
+  WCS_COMMAND_CLOSE_OTHER_TABS = 6,
+  WCS_COMMAND_CLOSE_TABS_TO_RIGHT = 7,
+  WCS_COMMAND_BACK = 10,
+  WCS_COMMAND_FORWARD = 11,
+  WCS_COMMAND_RELOAD = 12,
+  WCS_COMMAND_STOP = 13,
+  WCS_COMMAND_NAVIGATE = 14,
+  WCS_COMMAND_HOME = 15,
+  WCS_COMMAND_OPEN_HISTORY = 20,
+  WCS_COMMAND_OPEN_DOWNLOADS = 21,
+  WCS_COMMAND_OPEN_BOOKMARKS = 22,
+  WCS_COMMAND_OPEN_EXTENSIONS = 23,
+  WCS_COMMAND_OPEN_PASSWORDS = 24,
+  WCS_COMMAND_OPEN_SETTINGS = 25,
+  WCS_COMMAND_OPEN_PROFILES = 26,
+  WCS_COMMAND_NEW_WINDOW = 30,
+  WCS_COMMAND_NEW_INCOGNITO_WINDOW = 31,
+  WCS_COMMAND_FIND = 32,
+  WCS_COMMAND_PRINT = 33,
+  WCS_COMMAND_SAVE_PAGE = 34,
+  WCS_COMMAND_ZOOM_IN = 35,
+  WCS_COMMAND_ZOOM_OUT = 36,
+  WCS_COMMAND_ZOOM_RESET = 37,
+  WCS_COMMAND_TOGGLE_FULLSCREEN = 38,
+  WCS_COMMAND_OPEN_ABOUT = 39,
+  WCS_COMMAND_EXIT = 40,
+  WCS_COMMAND_SET_RESTORE_ON_STARTUP = 41,
+  WCS_COMMAND_OPEN_SEARCH_SETTINGS = 42,
+  WCS_COMMAND_BOOKMARK_PAGE = 43,
+  WCS_COMMAND_SHOW_SITE_INFO = 44,
+  WCS_COMMAND_FOCUS_CONTENT = 45,
+  WCS_COMMAND_FIND_TEXT = 46,
+  WCS_COMMAND_FIND_NEXT = 47,
+  WCS_COMMAND_CLOSE_FIND = 48,
+  WCS_COMMAND_OPEN_BOOKMARK = 49,
+  WCS_COMMAND_RESTORE_SESSION = 50,
+  WCS_COMMAND_OPEN_DOWNLOAD = 51,
+  WCS_COMMAND_SHOW_DOWNLOAD_IN_FOLDER = 52,
+  WCS_COMMAND_SAVE_BOOKMARK = 53,
+  WCS_COMMAND_OPEN_SITE_SETTINGS = 54,
+  WCS_COMMAND_SET_DEFAULT_BROWSER = 55,
+  WCS_COMMAND_DISMISS_DEFAULT_BROWSER = 56,
+} WcsCommand;
+
+typedef struct WcsCommandArgs {
+  uint32_t size;
+  WcsCommand command;
+  int64_t tab_id;
+  int32_t tab_index;
+  const wchar_t* text;
+  uint32_t event_flags;
+} WcsCommandArgs;
+
+typedef void(__stdcall* WcsInvokeCommand)(void* context,
+                                          const WcsCommandArgs* args);
+
+typedef struct WcsHostCallbacks {
+  uint32_t size;
+  uint32_t api_version;
+  void* context;
+  WcsInvokeCommand invoke_command;
+} WcsHostCallbacks;
+
+typedef struct WcsTabState {
+  uint32_t size;
+  int64_t tab_id;
+  int32_t index;
+  const wchar_t* title;
+  const wchar_t* url;
+  const wchar_t* favicon_url;
+  int32_t active;
+  int32_t pinned;
+  int32_t loading;
+  int32_t audible;
+  int32_t muted;
+} WcsTabState;
+
+typedef struct WcsBookmarkState {
+  uint32_t size;
+  const wchar_t* title;
+  const wchar_t* url;
+  int32_t is_folder;
+} WcsBookmarkState;
+
+typedef struct WcsHistoryEntryState {
+  uint32_t size;
+  const wchar_t* title;
+  const wchar_t* url;
+  const wchar_t* visit_time;
+} WcsHistoryEntryState;
+
+typedef struct WcsDownloadState {
+  uint32_t size;
+  uint32_t id;
+  const wchar_t* title;
+  const wchar_t* url;
+  const wchar_t* target_path;
+  const wchar_t* status;
+  int32_t complete;
+  int32_t in_progress;
+} WcsDownloadState;
+
+typedef struct WcsWindowState {
+  uint32_t size;
+  const WcsTabState* tabs;
+  size_t tab_count;
+  int32_t active_index;
+  int32_t can_go_back;
+  int32_t can_go_forward;
+  int32_t is_incognito;
+  const wchar_t* profile_name;
+  int32_t restore_on_startup;
+  const WcsBookmarkState* bookmarks;
+  size_t bookmark_count;
+  int32_t bookmark_bar_visible;
+  const WcsBookmarkState* bookmark_library;
+  size_t bookmark_library_count;
+  const WcsHistoryEntryState* history_entries;
+  size_t history_entry_count;
+  int32_t history_loading;
+  const WcsDownloadState* downloads;
+  size_t download_count;
+  int32_t active_page_bookmarked;
+} WcsWindowState;
+
+typedef enum WcsContextMenuItemType {
+  WCS_CONTEXT_MENU_COMMAND = 0,
+  WCS_CONTEXT_MENU_SEPARATOR = 1,
+  WCS_CONTEXT_MENU_SUBMENU = 2,
+  WCS_CONTEXT_MENU_CHECK = 3,
+  WCS_CONTEXT_MENU_RADIO = 4,
+} WcsContextMenuItemType;
+
+// A flat description of a menu tree. `parent_index` is -1 for root items or
+// the zero-based index of a preceding WCS_CONTEXT_MENU_SUBMENU item.
+typedef struct WcsContextMenuItem {
+  uint32_t size;
+  WcsContextMenuItemType type;
+  int32_t command_id;
+  int32_t parent_index;
+  const wchar_t* label;
+  int32_t enabled;
+  int32_t checked;
+} WcsContextMenuItem;
+
+extern "C" {
+
+WCS_EXPORT uint32_t __stdcall WcsGetApiVersion(void);
+WCS_EXPORT HRESULT __stdcall WcsCreateShell(HWND parent,
+                                            const WcsHostCallbacks* callbacks,
+                                            WcsShellHandle* shell);
+WCS_EXPORT void __stdcall WcsDestroyShell(WcsShellHandle shell);
+WCS_EXPORT HRESULT __stdcall WcsUpdateWindowState(
+    WcsShellHandle shell,
+    const WcsWindowState* state);
+WCS_EXPORT void __stdcall WcsSetVisible(WcsShellHandle shell, BOOL visible);
+// Opens the native WinUI find-on-page flyout and focuses its query box.
+WCS_EXPORT void __stdcall WcsShowFind(WcsShellHandle shell);
+// Shows the native WinUI crash-recovery prompt.
+WCS_EXPORT void __stdcall WcsShowRestorePrompt(WcsShellHandle shell);
+// Shows the native WinUI default-browser prompt. Repeated calls while the
+// prompt is open are coalesced into the existing dialog.
+WCS_EXPORT void __stdcall WcsShowDefaultBrowserPrompt(
+    WcsShellHandle shell,
+    BOOL can_pin_to_taskbar);
+// Renders the live XAML visual tree to a PNG for visual regression testing.
+// The operation is asynchronous; callers may watch for the output file.
+WCS_EXPORT HRESULT __stdcall WcsCaptureShell(WcsShellHandle shell,
+                                             const wchar_t* output_path);
+// Deterministic preview-only visual-state hook. Chromium never calls this;
+// the shell harness uses it for hover/pressed visual regression captures.
+WCS_EXPORT void __stdcall WcsSetVisualStateForTesting(
+    WcsShellHandle shell,
+    const wchar_t* state);
+// Displays a WinUI MenuFlyout at a client-window screen coordinate and
+// returns its selected Chromium command id, or -1 when dismissed.
+WCS_EXPORT int32_t __stdcall WcsShowContextMenu(
+    WcsShellHandle shell,
+    const WcsContextMenuItem* items,
+    size_t item_count,
+    int32_t screen_x,
+    int32_t screen_y);
+
+}  // extern "C"
+
+#endif  // WINDOWS_CHROMIUM_SHELL_WINDOWS_CHROMIUM_SHELL_API_H_
